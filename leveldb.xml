@@ -145,6 +145,7 @@ require "gmcphelper"
 -- Constants
 -- =============================================================================
 local GMCP_HANDLER_ID = "3e7dedbe37e44942dd46d264"
+local DB_DIR = "state\\leveldb\\"
 local DB_FILENAME = "leveldb.db"
 local PREFIX = "[LevelDB] "
 
@@ -268,7 +269,9 @@ end
 local function open_db()
    if db then return true end
 
-   local path = GetInfo(66) .. DB_FILENAME
+   local dir = GetInfo(60) .. DB_DIR
+   os.execute('if not exist "' .. dir .. '" mkdir "' .. dir .. '"')
+   local path = dir .. DB_FILENAME
 
    local handle, err_msg, err_code = sqlite3.open(path)
    if not handle then

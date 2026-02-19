@@ -45,7 +45,7 @@ LevelDB listens to GMCP broadcasts (`char.status`, `char.base`, `char.worth`, `r
 
 XP per kill is calculated from the TNL (to-next-level) delta between combat start and end, with level-up detection. Gold is calculated from `char.worth.gold` delta. Rounds are counted by tracking `enemypct` changes.
 
-Data is stored in a single SQLite database (`leveldb.db`) in the MUSHclient root directory.
+Data is stored in a single SQLite database (`leveldb.db`) in `worlds/plugins/state/leveldb/`.
 
 See [LEVELDB.md](LEVELDB.md) for full implementation details.
 

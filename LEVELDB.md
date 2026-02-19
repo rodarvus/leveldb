@@ -57,7 +57,7 @@ DATABASE DESIGN
 
 File:
   leveldb.db
-  Location: GetInfo(66) (MUSHclient root directory)
+  Location: GetInfo(60) .. "state\leveldb\" (plugins state directory)
 
 Schema:
 
@@ -252,7 +252,7 @@ DATABASE OPERATIONS
 Following patterns from aard_GMCP_mapper.xml:
 
 - sqlite3 is a pre-loaded global in MUSHclient (no require needed)
-- Open: sqlite3.open(GetInfo(66) .. "leveldb.db")
+- Open: sqlite3.open(GetInfo(60) .. "state\\leveldb\\leveldb.db")
 - Default journal mode (DELETE) -- no WAL sidecar files
 - Write: db:exec() for INSERT statements
 - Read: db:nrows() for SELECT queries
@@ -332,7 +332,7 @@ FILE LOCATIONS
 ================================================================================
 
 Plugin: leveldb/leveldb.xml
-Database file: {MUSHclient root}/leveldb.db
+Database file: {plugins}/state/leveldb/leveldb.db
 Documentation:
   - LEVELDB.md (this file) - implementation guide
   - README.md - user documentation
