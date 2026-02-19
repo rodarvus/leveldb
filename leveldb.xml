@@ -178,7 +178,7 @@ local cached_enemy = ""
 -- =============================================================================
 local in_combat = false
 local death_flag = false
-local fight_start = nil     -- Snapshot at combat start: {time, tnl, gold, level, zone, room_num, room_name, enemy}
+local fight_start = nil     -- Snapshot at combat start: {tnl, gold, level, zone, room_num, room_name, enemy}
 local damage_total = 0      -- Accumulated damage from [damage] lines this fight
 local round_count = 0       -- Number of enemypct changes this fight
 local last_enemypct = nil   -- For dedup of multiple char.status per round
