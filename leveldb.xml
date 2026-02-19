@@ -57,6 +57,20 @@
       script="ldb_level"
    ></alias>
    <alias
+      match="^ldb thislevel$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_thislevel"
+   ></alias>
+   <alias
+      match="^ldb lastlevel$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_lastlevel"
+   ></alias>
+   <alias
       match="^ldb zone(?: (.+))?$"
       enabled="y"
       regexp="y"
@@ -562,6 +576,8 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb help                - Show this help")
    ColourNote("cyan", "", "  ldb on / off            - Enable/disable data collection")
    ColourNote("cyan", "", "  ldb level [N]           - Kill breakdown for level N (default: current)")
+   ColourNote("cyan", "", "  ldb thislevel           - Kill breakdown for current level")
+   ColourNote("cyan", "", "  ldb lastlevel           - Kill breakdown for previous level")
    ColourNote("cyan", "", "  ldb zone [name]         - Stats for a zone (default: current)")
    ColourNote("cyan", "", "  ldb mob <name>          - Stats for a mob (substring match)")
    ColourNote("cyan", "", "  ldb top mobs [N]        - Top N mobs by kill count (default 10)")
@@ -599,6 +615,34 @@ function ldb_level(name, line, wildcards)
       end
    end
    show_level_stats(level)
+end
+
+-- =============================================================================
+-- Command: ldb thislevel
+-- =============================================================================
+function ldb_thislevel(name, line, wildcards)
+   if not require_db() then return end
+   if not cached_level then
+      ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
+      return
+   end
+   show_level_stats(cached_level)
+end
+
+-- =============================================================================
+-- Command: ldb lastlevel
+-- =============================================================================
+function ldb_lastlevel(name, line, wildcards)
+   if not require_db() then return end
+   if not cached_level then
+      ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
+      return
+   end
+   if cached_level <= 1 then
+      ColourNote("yellow", "", PREFIX .. "No previous level.")
+      return
+   end
+   show_level_stats(cached_level - 1)
 end
 
 function show_level_stats(level)
