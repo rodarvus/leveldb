@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="1.0"
+   version="2.0"
    save_state="y"
    >
 
@@ -50,28 +50,14 @@
       script="ldb_off"
    ></alias>
    <alias
-      match="^ldb level$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_level_current"
-   ></alias>
-   <alias
-      match="^ldb level (\d+)$"
+      match="^ldb level(?: (\d+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
       script="ldb_level"
    ></alias>
    <alias
-      match="^ldb zone$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_zone_current"
-   ></alias>
-   <alias
-      match="^ldb zone (.+)$"
+      match="^ldb zone(?: (.+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
@@ -85,56 +71,28 @@
       script="ldb_mob"
    ></alias>
    <alias
-      match="^ldb top mobs$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_top_mobs_default"
-   ></alias>
-   <alias
-      match="^ldb top mobs (\d+)$"
+      match="^ldb top mobs(?: (\d+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
       script="ldb_top_mobs"
    ></alias>
    <alias
-      match="^ldb top zones$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_top_zones_default"
-   ></alias>
-   <alias
-      match="^ldb top zones (\d+)$"
+      match="^ldb top zones(?: (\d+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
       script="ldb_top_zones"
    ></alias>
    <alias
-      match="^ldb top xp$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_top_xp_default"
-   ></alias>
-   <alias
-      match="^ldb top xp (\d+)$"
+      match="^ldb top xp(?: (\d+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
       script="ldb_top_xp"
    ></alias>
    <alias
-      match="^ldb deaths$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_deaths_default"
-   ></alias>
-   <alias
-      match="^ldb deaths (\d+)$"
+      match="^ldb deaths(?: (\d+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
@@ -146,20 +104,6 @@
       regexp="y"
       sequence="100"
       script="ldb_db_info"
-   ></alias>
-   <alias
-      match="^ldb db list$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_db_list"
-   ></alias>
-   <alias
-      match="^ldb db switch$"
-      enabled="y"
-      regexp="y"
-      sequence="100"
-      script="ldb_db_switch"
    ></alias>
 </aliases>
 
@@ -201,7 +145,7 @@ require "gmcphelper"
 -- Constants
 -- =============================================================================
 local GMCP_HANDLER_ID = "3e7dedbe37e44942dd46d264"
-local SCHEMA_VERSION = 1
+local DB_FILENAME = "leveldb.db"
 local PREFIX = "[LevelDB] "
 
 -- =============================================================================
@@ -213,8 +157,7 @@ local enabled = false
 -- Database state
 -- =============================================================================
 local db = nil              -- SQLite database handle
-local db_filename = nil     -- Current database filename (e.g., "ldb_T0R0.db")
-local db_path = nil         -- Full path to current database
+local db_path = nil         -- Full path to database
 
 -- =============================================================================
 -- GMCP cached values (updated on each broadcast)
@@ -264,86 +207,52 @@ local function fixsql(s)
 end
 
 -- =============================================================================
--- Schema management
+-- Schema initialization
 -- =============================================================================
-local function get_schema_version()
-   -- Check if schema_version table exists
-   local found = false
-   for row in db:nrows("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'") do
-      found = true
-   end
-   if not found then return 0 end
-
-   local version = 0
-   for row in db:nrows("SELECT version FROM schema_version LIMIT 1") do
-      version = row.version
-   end
-   return version
-end
-
-local function set_schema_version(version)
-   db:exec("DELETE FROM schema_version")
-   db:exec(string.format("INSERT INTO schema_version (version) VALUES (%d)", version))
-end
-
-local function migrate_to_v1()
+local function init_schema()
    local sql = [[
-      CREATE TABLE IF NOT EXISTS schema_version (
-         version INTEGER NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS kills (
-         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-         timestamp   INTEGER NOT NULL,
-         mob_name    TEXT NOT NULL,
-         zone        TEXT NOT NULL,
-         room_num    INTEGER,
-         room_name   TEXT,
-         level       INTEGER NOT NULL,
-         xp_gained   INTEGER NOT NULL DEFAULT 0,
-         gold_gained INTEGER NOT NULL DEFAULT 0,
+         id           INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp    INTEGER NOT NULL,
+         mob_name     TEXT NOT NULL,
+         zone         TEXT NOT NULL,
+         room_num     INTEGER,
+         room_name    TEXT,
+         level        INTEGER NOT NULL,
+         xp_gained    INTEGER NOT NULL DEFAULT 0,
+         gold_gained  INTEGER NOT NULL DEFAULT 0,
          damage_total INTEGER NOT NULL DEFAULT 0,
-         rounds      INTEGER NOT NULL DEFAULT 0,
-         duration    INTEGER NOT NULL DEFAULT 0
+         rounds       INTEGER NOT NULL DEFAULT 0,
+         duration     INTEGER NOT NULL DEFAULT 0,
+         tier         INTEGER,
+         remort       INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS deaths (
-         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-         timestamp   INTEGER NOT NULL,
-         mob_name    TEXT,
-         zone        TEXT NOT NULL,
-         room_num    INTEGER,
-         room_name   TEXT,
-         level       INTEGER NOT NULL
+         id           INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp    INTEGER NOT NULL,
+         mob_name     TEXT,
+         zone         TEXT NOT NULL,
+         room_num     INTEGER,
+         room_name    TEXT,
+         level        INTEGER NOT NULL,
+         tier         INTEGER,
+         remort       INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_kills_level ON kills(level);
       CREATE INDEX IF NOT EXISTS idx_kills_zone ON kills(zone);
       CREATE INDEX IF NOT EXISTS idx_kills_mob ON kills(mob_name);
       CREATE INDEX IF NOT EXISTS idx_kills_timestamp ON kills(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_kills_tier ON kills(tier);
+      CREATE INDEX IF NOT EXISTS idx_kills_remort ON kills(remort);
       CREATE INDEX IF NOT EXISTS idx_deaths_level ON deaths(level);
       CREATE INDEX IF NOT EXISTS idx_deaths_zone ON deaths(zone);
+      CREATE INDEX IF NOT EXISTS idx_deaths_tier ON deaths(tier);
+      CREATE INDEX IF NOT EXISTS idx_deaths_remort ON deaths(remort);
    ]]
    db:exec(sql)
-   if dbcheck(db:errcode(), db:errmsg(), "migrate_to_v1") then return false end
-   set_schema_version(1)
-   return true
-end
-
-local function run_migrations()
-   local version = get_schema_version()
-
-   if version < 1 then
-      if not migrate_to_v1() then
-         ColourNote("red", "", PREFIX .. "Migration to v1 failed!")
-         return false
-      end
-   end
-
-   -- Future migrations go here:
-   -- if version < 2 then migrate_to_v2() end
-
-   return true
+   return not dbcheck(db:errcode(), db:errmsg(), "init_schema")
 end
 
 -- =============================================================================
@@ -353,16 +262,14 @@ local function close_db()
    if db then
       db:close()
       db = nil
-      db_filename = nil
       db_path = nil
    end
 end
 
-local function open_db(tier, remort)
-   close_db()
+local function open_db()
+   if db then return true end
 
-   local filename = string.format("ldb_T%dR%d.db", tier, remort)
-   local path = GetInfo(66) .. filename
+   local path = GetInfo(66) .. DB_FILENAME
 
    local handle, err_msg, err_code = sqlite3.open(path)
    if not handle then
@@ -371,51 +278,16 @@ local function open_db(tier, remort)
    end
 
    db = handle
-   db_filename = filename
    db_path = path
 
-   -- Enable WAL mode for better concurrent read/write
    db:exec("PRAGMA journal_mode=WAL;")
 
-   -- Run schema migrations
-   if not run_migrations() then
+   if not init_schema() then
       close_db()
       return false
    end
 
    return true
-end
-
--- =============================================================================
--- Database switching (on tier/remort change)
--- =============================================================================
-local function detect_and_switch_db()
-   local base = gmcp("char.base")
-   if not base then return false end
-
-   local tier = tonumber(base.tier)
-   local remorts = tonumber(base.remorts)
-   local perlevel = tonumber(base.perlevel)
-
-   if not tier or not remorts then return false end
-
-   -- Update perlevel cache
-   if perlevel then cached_perlevel = perlevel end
-
-   -- Check if DB switch is needed
-   if tier == cached_tier and remorts == cached_remorts and db then
-      return true  -- Already on correct DB
-   end
-
-   cached_tier = tier
-   cached_remorts = remorts
-
-   if open_db(tier, remorts) then
-      ColourNote("cyan", "", PREFIX .. "Database: " .. db_filename)
-      return true
-   end
-
-   return false
 end
 
 -- =============================================================================
@@ -455,7 +327,6 @@ local function record_kill()
          -- Normal kill
          xp_gained = fight_start.tnl - cached_tnl
       end
-      -- If xp_gained < 0, something unexpected happened (quest XP, etc.) — clamp to 0
       if xp_gained < 0 then xp_gained = 0 end
    end
 
@@ -463,8 +334,6 @@ local function record_kill()
    local gold_gained = 0
    if fight_start.gold and cached_gold then
       gold_gained = cached_gold - fight_start.gold
-      -- Gold can go negative if player spent gold during combat (shops, etc.)
-      -- Record as-is for accuracy
    end
 
    -- Calculate duration
@@ -472,8 +341,9 @@ local function record_kill()
 
    -- INSERT kill record
    local query = string.format(
-      "INSERT INTO kills (timestamp, mob_name, zone, room_num, room_name, level, xp_gained, gold_gained, damage_total, rounds, duration) " ..
-      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %d, %d)",
+      "INSERT INTO kills (timestamp, mob_name, zone, room_num, room_name, level, " ..
+      "xp_gained, gold_gained, damage_total, rounds, duration, tier, remort) " ..
+      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %d, %d, %s, %s)",
       os.time(),
       fixsql(fight_start.enemy),
       fixsql(fight_start.zone),
@@ -484,7 +354,9 @@ local function record_kill()
       gold_gained,
       damage_total,
       round_count,
-      duration
+      duration,
+      cached_tier and tostring(cached_tier) or "NULL",
+      cached_remorts and tostring(cached_remorts) or "NULL"
    )
 
    db:exec(query)
@@ -498,14 +370,16 @@ local function record_death()
    local enemy = (in_combat and fight_start) and fight_start.enemy or cached_enemy
 
    local query = string.format(
-      "INSERT INTO deaths (timestamp, mob_name, zone, room_num, room_name, level) " ..
-      "VALUES (%d, %s, %s, %s, %s, %d)",
+      "INSERT INTO deaths (timestamp, mob_name, zone, room_num, room_name, level, tier, remort) " ..
+      "VALUES (%d, %s, %s, %s, %s, %d, %s, %s)",
       os.time(),
       fixsql(enemy),
       fixsql(cached_zone or "Unknown"),
       cached_room_num and tostring(cached_room_num) or "NULL",
       fixsql(cached_room_name),
-      cached_level or 0
+      cached_level or 0,
+      cached_tier and tostring(cached_tier) or "NULL",
+      cached_remorts and tostring(cached_remorts) or "NULL"
    )
 
    db:exec(query)
@@ -530,14 +404,8 @@ function OnPluginBroadcast(msg, id, name, text)
       local base = gmcp("char.base")
       if base then
          if base.perlevel then cached_perlevel = tonumber(base.perlevel) or 1000 end
-         -- Detect tier/remort change and switch DB
-         local new_tier = tonumber(base.tier)
-         local new_remorts = tonumber(base.remorts)
-         if new_tier and new_remorts then
-            if new_tier ~= cached_tier or new_remorts ~= cached_remorts then
-               detect_and_switch_db()
-            end
-         end
+         if base.tier then cached_tier = tonumber(base.tier) end
+         if base.remorts then cached_remorts = tonumber(base.remorts) end
       end
 
    elseif text == "char.status" then
@@ -567,7 +435,6 @@ function OnPluginBroadcast(msg, id, name, text)
       else
          -- COMBAT state
          if death_flag then
-            -- Already processed death, ignore subsequent GMCP updates
             if new_enemy == "" then
                end_combat()
             end
@@ -621,7 +488,6 @@ function ldb_on_damage_line(name, line, wildcards)
    if not in_combat then return end
    if not enabled then return end
 
-   -- wildcards[1] = damage value (from trailing [N])
    local dmg = tonumber(wildcards[1])
    if dmg then
       damage_total = damage_total + dmg
@@ -633,9 +499,6 @@ function ldb_on_player_death(name, line, wildcards)
 
    death_flag = true
    record_death()
-
-   -- Don't end_combat() yet -- wait for GMCP enemy="" to clean up properly
-   -- The death_flag prevents record_kill() from firing
 end
 
 -- =============================================================================
@@ -669,7 +532,7 @@ end
 -- =============================================================================
 local function require_db()
    if not db then
-      ColourNote("red", "", PREFIX .. "No database open. Make sure you are connected to Aardwolf.")
+      ColourNote("red", "", PREFIX .. "No database open. Try reloading the plugin.")
       return false
    end
    return true
@@ -681,7 +544,7 @@ end
 function ldb_status(name, line, wildcards)
    ColourNote("cyan", "", PREFIX .. "Status")
    ColourNote("cyan", "", "  Enabled: " .. (enabled and "ON" or "OFF"))
-   ColourNote("cyan", "", "  Database: " .. (db_filename or "(none)"))
+   ColourNote("cyan", "", "  Database: " .. (db_path or "(none)"))
 
    if db then
       local kill_count = 0
@@ -703,7 +566,8 @@ function ldb_status(name, line, wildcards)
       ColourNote("cyan", "", "  Current zone: " .. cached_zone)
    end
    if in_combat and fight_start then
-      ColourNote("cyan", "", "  In combat: " .. fight_start.enemy .. " (round " .. round_count .. ", dmg " .. format_number(damage_total) .. ")")
+      ColourNote("cyan", "", "  In combat: " .. fight_start.enemy ..
+         " (round " .. round_count .. ", dmg " .. format_number(damage_total) .. ")")
    end
 end
 
@@ -723,8 +587,6 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb top xp [N]          - Top N mobs by avg XP per kill (default 10)")
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
-   ColourNote("cyan", "", "  ldb db list             - List all database files")
-   ColourNote("cyan", "", "  ldb db switch           - Force re-detect tier/remort")
 end
 
 -- =============================================================================
@@ -732,36 +594,27 @@ end
 -- =============================================================================
 function ldb_on(name, line, wildcards)
    enabled = true
-   if not db then
-      detect_and_switch_db()
-   end
-   ColourNote("cyan", "", PREFIX .. "Data collection enabled" .. (db_filename and (" (" .. db_filename .. ")") or ""))
+   if not db then open_db() end
+   ColourNote("cyan", "", PREFIX .. "Data collection enabled.")
 end
 
 function ldb_off(name, line, wildcards)
    enabled = false
-   ColourNote("cyan", "", PREFIX .. "Data collection disabled")
+   ColourNote("cyan", "", PREFIX .. "Data collection disabled.")
 end
 
 -- =============================================================================
 -- Command: ldb level [N]
 -- =============================================================================
-function ldb_level_current(name, line, wildcards)
-   if not require_db() then return end
-   local level = cached_level
-   if not level then
-      ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
-      return
-   end
-   show_level_stats(level)
-end
-
 function ldb_level(name, line, wildcards)
    if not require_db() then return end
    local level = tonumber(wildcards[1])
    if not level then
-      ColourNote("red", "", PREFIX .. "Invalid level number.")
-      return
+      level = cached_level
+      if not level then
+         ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
+         return
+      end
    end
    show_level_stats(level)
 end
@@ -769,7 +622,6 @@ end
 function show_level_stats(level)
    ColourNote("cyan", "", PREFIX .. "Level " .. level .. " breakdown:")
 
-   -- Summary
    local total_kills = 0
    local total_xp = 0
    local total_gold = 0
@@ -844,26 +696,22 @@ end
 -- =============================================================================
 -- Command: ldb zone [name]
 -- =============================================================================
-function ldb_zone_current(name, line, wildcards)
-   if not require_db() then return end
-   local zone = cached_zone
-   if not zone then
-      ColourNote("red", "", PREFIX .. "Current zone unknown. Try again after GMCP data arrives.")
-      return
-   end
-   show_zone_stats(zone)
-end
-
 function ldb_zone(name, line, wildcards)
    if not require_db() then return end
-   show_zone_stats(wildcards[1])
+   local zone_name = wildcards[1]
+   if not zone_name or zone_name == "" then
+      zone_name = cached_zone
+      if not zone_name then
+         ColourNote("red", "", PREFIX .. "Current zone unknown. Try again after GMCP data arrives.")
+         return
+      end
+   end
+   show_zone_stats(zone_name)
 end
 
 function show_zone_stats(zone_name)
-   -- Use LIKE for flexible matching
    local like_pattern = "%" .. zone_name .. "%"
 
-   -- Find matching zones
    local zones_found = {}
    for row in db:nrows(string.format(
       "SELECT DISTINCT zone FROM kills WHERE zone LIKE %s", fixsql(like_pattern))) do
@@ -973,17 +821,10 @@ end
 -- =============================================================================
 -- Command: ldb top mobs [N]
 -- =============================================================================
-function ldb_top_mobs_default(name, line, wildcards)
-   if not require_db() then return end
-   show_top_mobs(10)
-end
-
 function ldb_top_mobs(name, line, wildcards)
    if not require_db() then return end
-   show_top_mobs(tonumber(wildcards[1]) or 10)
-end
+   local limit = tonumber(wildcards[1]) or 10
 
-function show_top_mobs(limit)
    ColourNote("cyan", "", PREFIX .. "Top " .. limit .. " mobs by kill count:")
 
    local count = 0
@@ -1004,17 +845,10 @@ end
 -- =============================================================================
 -- Command: ldb top zones [N]
 -- =============================================================================
-function ldb_top_zones_default(name, line, wildcards)
-   if not require_db() then return end
-   show_top_zones(10)
-end
-
 function ldb_top_zones(name, line, wildcards)
    if not require_db() then return end
-   show_top_zones(tonumber(wildcards[1]) or 10)
-end
+   local limit = tonumber(wildcards[1]) or 10
 
-function show_top_zones(limit)
    ColourNote("cyan", "", PREFIX .. "Top " .. limit .. " zones by total XP:")
 
    local count = 0
@@ -1035,17 +869,10 @@ end
 -- =============================================================================
 -- Command: ldb top xp [N]
 -- =============================================================================
-function ldb_top_xp_default(name, line, wildcards)
-   if not require_db() then return end
-   show_top_xp(10)
-end
-
 function ldb_top_xp(name, line, wildcards)
    if not require_db() then return end
-   show_top_xp(tonumber(wildcards[1]) or 10)
-end
+   local limit = tonumber(wildcards[1]) or 10
 
-function show_top_xp(limit)
    ColourNote("cyan", "", PREFIX .. "Top " .. limit .. " mobs by avg XP per kill:")
 
    local count = 0
@@ -1068,17 +895,10 @@ end
 -- =============================================================================
 -- Command: ldb deaths [N]
 -- =============================================================================
-function ldb_deaths_default(name, line, wildcards)
-   if not require_db() then return end
-   show_deaths(10)
-end
-
 function ldb_deaths(name, line, wildcards)
    if not require_db() then return end
-   show_deaths(tonumber(wildcards[1]) or 10)
-end
+   local limit = tonumber(wildcards[1]) or 10
 
-function show_deaths(limit)
    ColourNote("cyan", "", PREFIX .. "Last " .. limit .. " deaths:")
 
    local count = 0
@@ -1102,7 +922,6 @@ end
 -- =============================================================================
 function ldb_db_info(name, line, wildcards)
    ColourNote("cyan", "", PREFIX .. "Database info:")
-   ColourNote("white", "", "  File: " .. (db_filename or "(none)"))
    ColourNote("white", "", "  Path: " .. (db_path or "(none)"))
 
    if not db then
@@ -1134,60 +953,6 @@ function ldb_db_info(name, line, wildcards)
    for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths") do
       ColourNote("white", "", "  Deaths: " .. format_number(row.cnt))
    end
-
-   -- Schema version
-   ColourNote("white", "", "  Schema version: " .. get_schema_version())
-end
-
--- =============================================================================
--- Command: ldb db list
--- =============================================================================
-function ldb_db_list(name, line, wildcards)
-   ColourNote("cyan", "", PREFIX .. "Database files:")
-
-   local base_path = GetInfo(66)
-   local found = false
-
-   -- Scan for ldb_T*R*.db files
-   for tier = 0, 9 do
-      for remort = 0, 6 do
-         local filename = string.format("ldb_T%dR%d.db", tier, remort)
-         local filepath = base_path .. filename
-         local f = io.open(filepath, "r")
-         if f then
-            found = true
-            local size = f:seek("end")
-            f:close()
-
-            local size_str
-            if size < 1024 then
-               size_str = size .. " B"
-            elseif size < 1024 * 1024 then
-               size_str = string.format("%.1f KB", size / 1024)
-            else
-               size_str = string.format("%.1f MB", size / (1024 * 1024))
-            end
-
-            local marker = (filename == db_filename) and " <-- active" or ""
-            ColourNote("white", "", string.format("  %s (%s)%s", filename, size_str, marker))
-         end
-      end
-   end
-
-   if not found then
-      ColourNote("yellow", "", "  No database files found.")
-   end
-end
-
--- =============================================================================
--- Command: ldb db switch
--- =============================================================================
-function ldb_db_switch(name, line, wildcards)
-   if detect_and_switch_db() then
-      ColourNote("cyan", "", PREFIX .. "Database switched to: " .. (db_filename or "(none)"))
-   else
-      ColourNote("red", "", PREFIX .. "Failed to switch database. GMCP char.base data may not be available yet.")
-   end
 end
 
 -- =============================================================================
@@ -1195,12 +960,10 @@ end
 -- =============================================================================
 function OnPluginInstall()
    enabled = (GetVariable("enabled") == "true")
-
-   -- Try to open the database immediately from GMCP data
-   detect_and_switch_db()
+   open_db()
 
    if enabled then
-      ColourNote("cyan", "", PREFIX .. "Loaded (enabled). Database: " .. (db_filename or "(waiting for GMCP)"))
+      ColourNote("cyan", "", PREFIX .. "Loaded (enabled).")
    else
       ColourNote("cyan", "", PREFIX .. "Loaded (disabled). Use 'ldb on' to start collecting data.")
    end
@@ -1215,7 +978,6 @@ function OnPluginClose()
 end
 
 function OnPluginDisconnect()
-   -- End any active combat tracking on disconnect
    if in_combat then
       end_combat()
    end

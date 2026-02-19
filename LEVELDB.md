@@ -1,11 +1,11 @@
 ================================================================================
 LEVELDB PLUGIN - IMPLEMENTATION GUIDE
 ================================================================================
-Last Updated: 2026-02-17
+Last Updated: 2026-02-19
 Plugin File: leveldb.xml
 Plugin ID: b34c04e52c6c7bced4508230
 Author: Rodarvus
-Current Version: 1.0
+Current Version: 2.0
 
 ================================================================================
 OVERVIEW
@@ -18,17 +18,16 @@ entire leveling journey.
 Key Features:
 - Per-kill records: mob name, zone, room, level, XP, gold, damage, rounds, duration
 - Per-death records: mob, zone, room, level
-- Automatic database file switching on remort/tier changes
+- Tier and remort tracked as columns in every record
+- Single database file (leveldb.db) for all data
 - Rich query commands: per-level, per-zone, per-mob breakdowns, top-N rankings
-- SQLite persistent storage (one database per remort)
-- Schema versioning for future migrations
 
 ================================================================================
 COMMANDS
 ================================================================================
 
 BASIC:
-  ldb                     - Show status (enabled, DB file, kill/death counts)
+  ldb                     - Show status (enabled, DB path, kill/death counts)
   ldb help                - Show all commands
   ldb on                  - Enable data collection
   ldb off                 - Disable data collection
@@ -51,25 +50,17 @@ QUERIES:
                             mob, zone
 
 DATABASE:
-  ldb db                  - Database file info: path, size, record counts,
-                            schema version
-  ldb db list             - List all database files across all tier/remort
-                            combinations (scans T0-T9, R0-R6)
-  ldb db switch           - Force re-detect tier/remort from GMCP and switch DB
+  ldb db                  - Database file info: path, size, record counts
 
 ================================================================================
 DATABASE DESIGN
 ================================================================================
 
-File Naming:
-  ldb_T{tier}R{remort}.db
-  Examples: ldb_T0R1.db (first character), ldb_T3R7.db (tier 3, 7th class)
+File:
+  leveldb.db
   Location: GetInfo(66) (MUSHclient root directory)
 
-Schema (V1):
-
-  schema_version:
-    version INTEGER NOT NULL
+Schema:
 
   kills:
     id           INTEGER PRIMARY KEY AUTOINCREMENT
@@ -84,6 +75,8 @@ Schema (V1):
     damage_total INTEGER NOT NULL (0)   -- sum of [damage] from text lines
     rounds       INTEGER NOT NULL (0)   -- enemypct change count
     duration     INTEGER NOT NULL (0)   -- seconds (os.time() granularity)
+    tier         INTEGER               -- char.base.tier (nullable)
+    remort       INTEGER               -- char.base.remorts (nullable)
 
   deaths:
     id           INTEGER PRIMARY KEY AUTOINCREMENT
@@ -93,10 +86,13 @@ Schema (V1):
     room_num     INTEGER               -- room number (nullable)
     room_name    TEXT                   -- room name (nullable)
     level        INTEGER NOT NULL       -- player level at death
+    tier         INTEGER               -- char.base.tier (nullable)
+    remort       INTEGER               -- char.base.remorts (nullable)
 
 Indexes:
   idx_kills_level, idx_kills_zone, idx_kills_mob, idx_kills_timestamp
-  idx_deaths_level, idx_deaths_zone
+  idx_kills_tier, idx_kills_remort
+  idx_deaths_level, idx_deaths_zone, idx_deaths_tier, idx_deaths_remort
 
 Design Decisions:
 - xp_gained = 0 means fled/interrupted (not a real kill). All queries use
@@ -111,6 +107,7 @@ Design Decisions:
 - duration has 1-second granularity (os.time()). Acceptable for statistics.
 - room_num and room_name are nullable because GMCP room.info may not have
   arrived yet when combat starts (brief window on connect/reconnect).
+- tier and remort are nullable because char.base may not have arrived yet.
 
 ================================================================================
 COMBAT STATE MACHINE
@@ -206,9 +203,8 @@ GMCP BROADCASTS HANDLED
 ================================================================================
 
 char.base:
-  - Detects tier/remort changes to switch database files
   - Caches perlevel for XP level-up calculation
-  - Only triggers DB switch when tier or remort actually changes
+  - Caches tier and remort for INSERT columns
 
 char.status:
   - Primary combat state driver (enemy, enemypct, level, tnl)
@@ -226,7 +222,7 @@ Broadcasts NOT listened to (by design):
   - char.vitals: HP/mana/moves not tracked by LevelDB
   - char.stats: Stats not relevant to kill tracking
   - comm.channel: LevelDB has no interaction detection
-  - comm.quest: Quest XP not tracked in V1
+  - comm.quest: Quest XP not tracked in V2
 
 ================================================================================
 PLUGIN LIFECYCLE
@@ -234,12 +230,11 @@ PLUGIN LIFECYCLE
 
 OnPluginInstall:
   1. Restore enabled state from saved variable
-  2. Try to detect tier/remort and open database (may fail if GMCP not ready)
+  2. Open database (leveldb.db)
   3. Display load message
 
 OnPluginBroadcast (char.base):
-  - When tier or remort changes, automatically close current DB and open new one
-  - Also fires on initial GMCP data arrival after connect
+  - Caches perlevel, tier, and remort values from GMCP
 
 OnPluginSaveState:
   - Persists enabled flag (only persistent setting)
@@ -252,8 +247,6 @@ OnPluginDisconnect:
 
 State Persistence:
   save_state="y" with one variable: enabled (boolean)
-  Database file is re-detected from GMCP char.base on every load/connect,
-  so it does not need to be persisted.
 
 ================================================================================
 DATABASE OPERATIONS
@@ -262,7 +255,7 @@ DATABASE OPERATIONS
 Following patterns from aard_GMCP_mapper.xml:
 
 - sqlite3 is a pre-loaded global in MUSHclient (no require needed)
-- Open: sqlite3.open(GetInfo(66) .. filename)
+- Open: sqlite3.open(GetInfo(66) .. "leveldb.db")
 - WAL mode for concurrent read/write: PRAGMA journal_mode=WAL
 - Write: db:exec() for INSERT statements
 - Read: db:nrows() for SELECT queries
@@ -270,12 +263,8 @@ Following patterns from aard_GMCP_mapper.xml:
 - String escaping: fixsql() wraps strings in quotes, escapes embedded quotes,
   returns "NULL" for nil values (matching aard_GMCP_mapper.xml pattern)
 
-Schema Migration:
-  schema_version table tracks current version. On DB open:
-  1. Check if schema_version table exists (version = 0 if not)
-  2. Apply migrations sequentially: version < 1 -> migrate_to_v1()
-  3. Future migrations: version < 2 -> migrate_to_v2(), etc.
-  Each migration creates tables/indexes and updates the version number.
+Schema Initialization:
+  init_schema() creates tables and indexes with IF NOT EXISTS on database open.
 
 ================================================================================
 QUERY IMPLEMENTATION NOTES
@@ -296,11 +285,6 @@ Substring matching (ldb zone, ldb mob):
 ldb top xp:
 - Uses HAVING cnt >= 3 to exclude one-off kills that skew averages
 - Ranks by avg XP per kill (CAST SUM AS REAL / COUNT)
-
-ldb db list:
-- Scans all possible tier/remort combinations (T0-T9, R0-R6)
-- Uses io.open() to check file existence and size
-- Marks active database with "<-- active"
 
 ================================================================================
 PLUGIN COEXISTENCE
@@ -328,21 +312,16 @@ KNOWN LIMITATIONS
    two level-ups (extraordinarily rare), the calculation will be short. Same
    limitation as stats_tracker.xml.
 
-3. Brief window on connect/reconnect:
-   GMCP data may not be available when plugin loads. Database opens when first
-   char.base broadcast arrives. Kills during this window (unlikely) are silently
-   dropped. No crashes -- all recording functions check for nil db.
-
-4. Non-kill combat ends in kills table:
+3. Non-kill combat ends in kills table:
    Fled/interrupted combats are recorded with xp_gained=0. This is by design --
    all queries filter with WHERE xp_gained > 0 for "real kills". The raw data
    is preserved for potential future analysis.
 
-5. os.time() granularity:
+4. os.time() granularity:
    Duration tracking has 1-second resolution. Sub-second precision is not available
    in standard Lua. Acceptable for aggregate statistics.
 
-6. LIKE wildcard characters in search:
+5. LIKE wildcard characters in search:
    User input to ldb zone/mob is used directly in SQL LIKE patterns without
    escaping % or _ characters. This is acceptable because Aardwolf mob names and
    zone names never contain these characters.
@@ -361,13 +340,13 @@ FILE LOCATIONS
 ================================================================================
 
 Plugin: leveldb/leveldb.xml
-Database files: {MUSHclient root}/ldb_T{tier}R{remort}.db
+Database file: {MUSHclient root}/leveldb.db
 Documentation:
   - LEVELDB.md (this file) - implementation guide
-  - LEVELDB_DESIGN.md - original design document with full rationale
+  - README.md - user documentation
 
 ================================================================================
-FUTURE CONSIDERATIONS (NOT IN V1)
+FUTURE CONSIDERATIONS (NOT IN V2)
 ================================================================================
 
 - Session tracking / XP-per-hour calculation
@@ -375,10 +354,8 @@ FUTURE CONSIDERATIONS (NOT IN V1)
 - Item loot tracking
 - Quest/campaign/GQ tracking
 - Spell-per-kill tracking
-- Cross-database queries (compare remorts)
 - Data export (CSV/JSON)
 - Level time estimation
-- ldb compare command (compare stats between remorts)
 - ldb history command (XP/hour graph)
 - ldb leveltime command (average time per level)
 

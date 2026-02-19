@@ -4,7 +4,7 @@ A leveling database plugin for [Aardwolf MUD](http://www.aardwolf.com/), built f
 
 ## What it does
 
-LevelDB silently records every combat encounter into a persistent SQLite database. Each kill captures the mob name, zone, room, player level, XP gained, gold earned, total damage dealt, rounds fought, and fight duration. Deaths are tracked separately with the killing mob, zone, and level.
+LevelDB silently records every combat encounter into a persistent SQLite database. Each kill captures the mob name, zone, room, player level, XP gained, gold earned, total damage dealt, rounds fought, and fight duration. Deaths are tracked separately with the killing mob, zone, and level. Tier and remort are stored with every record.
 
 The plugin is fully passive — it observes GMCP broadcasts and combat text without ever sending commands to the MUD. It works alongside manual play, automation plugins like S&D and SpellUp, or any other setup.
 
@@ -12,9 +12,8 @@ The plugin is fully passive — it observes GMCP broadcasts and combat text with
 
 - **Per-kill tracking** — mob name, zone, room, level, XP, gold, damage, rounds, duration
 - **Death tracking** — mob, zone, room, level
-- **Per-remort databases** — one SQLite file per tier/remort combination, automatic switching
+- **Tier/remort columns** — every record includes the current tier and remort
 - **Query commands** — per-level breakdowns, per-zone stats, per-mob stats, top-N rankings, death history
-- **Schema versioning** — built-in migration framework for future upgrades
 
 ## Commands
 
@@ -31,8 +30,6 @@ The plugin is fully passive — it observes GMCP broadcasts and combat text with
 | `ldb top xp [N]` | Top N mobs by average XP per kill |
 | `ldb deaths [N]` | Last N deaths |
 | `ldb db` | Database file info |
-| `ldb db list` | List all database files |
-| `ldb db switch` | Force re-detect tier/remort |
 
 ## Installation
 
@@ -48,7 +45,7 @@ LevelDB listens to GMCP broadcasts (`char.status`, `char.base`, `char.worth`, `r
 
 XP per kill is calculated from the TNL (to-next-level) delta between combat start and end, with level-up detection. Gold is calculated from `char.worth.gold` delta. Rounds are counted by tracking `enemypct` changes. Duration uses `os.time()`.
 
-Data is stored in SQLite databases named `ldb_T{tier}R{remort}.db` in the MUSHclient root directory. The plugin automatically switches databases when you remort or tier.
+Data is stored in a single SQLite database (`leveldb.db`) in the MUSHclient root directory.
 
 See [LEVELDB.md](LEVELDB.md) for full implementation details.
 
