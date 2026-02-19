@@ -148,6 +148,17 @@
       script="ldb_on_player_death"
       sequence="100"
    ></trigger>
+
+   <!-- Bonus gold reward (campaigns, GQ wins, etc.) -->
+   <trigger
+      match="^\s+Reward of ([\d,]+) gold coins added\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_bonus_gold"
+      sequence="100"
+   ></trigger>
 </triggers>
 
 
@@ -197,6 +208,7 @@ local fight_start = nil     -- Snapshot at combat start: {tnl, gold, level, zone
 local damage_total = 0      -- Accumulated damage from [damage] lines this fight
 local round_count = 0       -- Number of enemypct changes this fight
 local last_enemypct = nil   -- For dedup of multiple char.status per round
+local bonus_gold = 0        -- Bonus gold rewards to exclude from kill gold (campaigns, GQ)
 
 -- =============================================================================
 -- Database helpers (following aard_GMCP_mapper.xml patterns)
@@ -313,6 +325,7 @@ local function start_fight(enemy_name)
    damage_total = 0
    round_count = 0
    last_enemypct = nil
+   bonus_gold = 0
 
    fight_start = {
       tnl = cached_tnl,
@@ -343,10 +356,10 @@ local function record_kill()
       if xp_gained < 0 then xp_gained = 0 end
    end
 
-   -- Calculate gold gained
+   -- Calculate gold gained (excluding bonus rewards like campaigns/GQ)
    local gold_gained = 0
    if fight_start.gold and cached_gold then
-      gold_gained = cached_gold - fight_start.gold
+      gold_gained = cached_gold - fight_start.gold - bonus_gold
    end
 
    -- INSERT kill record
@@ -401,6 +414,7 @@ local function end_combat()
    damage_total = 0
    round_count = 0
    last_enemypct = nil
+   bonus_gold = 0
 end
 
 -- =============================================================================
@@ -512,6 +526,15 @@ function ldb_on_player_death(name, line, wildcards)
 
    death_flag = true
    record_death()
+end
+
+function ldb_on_bonus_gold(name, line, wildcards)
+   if not enabled then return end
+
+   local amount = tonumber((string.gsub(wildcards[1], ",", "")))
+   if amount then
+      bonus_gold = bonus_gold + amount
+   end
 end
 
 -- =============================================================================

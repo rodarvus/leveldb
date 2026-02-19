@@ -99,6 +99,9 @@ Design Decisions:
   All kills are included in queries regardless of xp_gained value.
 - mob_name from char.status.enemy includes articles ("a field mouse"). This is
   acceptable because grouping by mob_name still works correctly.
+- gold_gained excludes bonus gold rewards (campaigns, GQ wins) detected via
+  "Reward of N gold coins added." text trigger. Only corpse loot and autosell
+  gold are attributed to kills.
 - gold_gained may be slightly inaccurate on enemy-switch in multi-mob combat
   because char.worth arrives after char.status in GMCP sequence. Totals across
   all kills in a session remain correct.
@@ -121,7 +124,7 @@ Transitions:
   1. IDLE --> COMBAT:
      When: char.status.enemy becomes non-empty
      Action: Snapshot fight_start (tnl, gold, level, zone, room, enemy)
-             Reset damage_total, round_count, last_enemypct, death_flag
+             Reset damage_total, round_count, last_enemypct, death_flag, bonus_gold
 
   2. COMBAT --> COMBAT (round tick):
      When: char.status.enemypct changes value (same enemy, health decreasing)
@@ -202,6 +205,19 @@ Why "Your" excludes mob damage: Mob damage lines use the mob's possessive name
 ("A pirate's claw hits you. [234]"), not "Your". This is a reliable discriminator.
 
 The trigger uses keep_evaluating="y" for compatibility with Aardwolf_Damage_Window.
+
+================================================================================
+BONUS GOLD EXCLUSION
+================================================================================
+
+Trigger regex: ^\s+Reward of ([\d,]+) gold coins added\.$
+
+Matches the reward line printed on campaign completion, GQ wins, and similar
+events. The captured gold amount is accumulated in bonus_gold and subtracted
+from gold_gained in record_kill(). This ensures per-kill gold reflects only
+corpse loot and autosell, not bulk rewards.
+
+bonus_gold is reset in start_fight() and end_combat().
 
 ================================================================================
 GMCP BROADCASTS HANDLED
