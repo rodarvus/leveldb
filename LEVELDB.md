@@ -70,7 +70,7 @@ Schema:
     room_num     INTEGER               -- room.info.num (nullable)
     room_name    TEXT                   -- room.info.name (nullable)
     level        INTEGER NOT NULL       -- player level at combat start
-    xp_gained    INTEGER NOT NULL (0)   -- TNL delta; 0 = fled/interrupted
+    xp_gained    INTEGER NOT NULL (0)   -- TNL delta; 0 for mobs that yield no XP
     gold_gained  INTEGER NOT NULL (0)   -- char.worth.gold delta
     damage_total INTEGER NOT NULL (0)   -- sum of [damage] from text lines
     rounds       INTEGER NOT NULL (0)   -- enemypct change count
@@ -94,8 +94,8 @@ Indexes:
   idx_deaths_level, idx_deaths_zone, idx_deaths_tier, idx_deaths_remort
 
 Design Decisions:
-- xp_gained = 0 means fled/interrupted (not a real kill). All queries use
-  WHERE xp_gained > 0 when counting "real kills".
+- xp_gained = 0 is valid (mobs that yield no XP, fled/interrupted combats).
+  All kills are included in queries regardless of xp_gained value.
 - mob_name from char.status.enemy includes articles ("a field mouse"). This is
   acceptable because grouping by mob_name still works correctly.
 - gold_gained may be slightly inaccurate on enemy-switch in multi-mob combat
@@ -270,7 +270,7 @@ QUERY IMPLEMENTATION NOTES
 
 All query commands:
 - Check require_db() before executing (ensures DB is open)
-- Use xp_gained > 0 filter for "real kills" (excludes fled/interrupted)
+- Include all kills regardless of xp_gained (0-XP kills are valid)
 - Use format_number() for comma-separated large numbers
 
 Substring matching (ldb zone, ldb mob):
@@ -309,10 +309,10 @@ KNOWN LIMITATIONS
    two level-ups (extraordinarily rare), the calculation will be short. Same
    limitation as stats_tracker.xml.
 
-3. Non-kill combat ends in kills table:
-   Fled/interrupted combats are recorded with xp_gained=0. This is by design --
-   all queries filter with WHERE xp_gained > 0 for "real kills". The raw data
-   is preserved for potential future analysis.
+3. Zero-XP kills in kills table:
+   Kills yielding 0 XP (low-level mobs, fled/interrupted combats) are recorded
+   and included in all queries. This is by design -- LevelDB serves as a
+   historical fight log, not just an XP tracker.
 
 4. LIKE wildcard characters in search:
    User input to ldb zone/mob is used directly in SQL LIKE patterns without

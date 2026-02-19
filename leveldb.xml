@@ -528,7 +528,7 @@ function ldb_status(name, line, wildcards)
    if db then
       local kill_count = 0
       local death_count = 0
-      for row in db:nrows("SELECT COUNT(*) as cnt FROM kills WHERE xp_gained > 0") do
+      for row in db:nrows("SELECT COUNT(*) as cnt FROM kills") do
          kill_count = row.cnt
       end
       for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths") do
@@ -611,7 +611,7 @@ function show_level_stats(level)
    for row in db:nrows(string.format(
       "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, COALESCE(SUM(gold_gained), 0) as gold, " ..
       "COALESCE(SUM(damage_total), 0) as dmg, COALESCE(SUM(rounds), 0) as rnd " ..
-      "FROM kills WHERE level = %d AND xp_gained > 0", level)) do
+      "FROM kills WHERE level = %d ", level)) do
       total_kills = row.cnt
       total_xp = row.xp
       total_gold = row.gold
@@ -648,7 +648,7 @@ function show_level_stats(level)
    local count = 0
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
-      "FROM kills WHERE level = %d AND xp_gained > 0 " ..
+      "FROM kills WHERE level = %d " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT 5", level)) do
       count = count + 1
       ColourNote("white", "", string.format("    %d. %s (%d kills, %s XP)",
@@ -660,7 +660,7 @@ function show_level_stats(level)
    count = 0
    for row in db:nrows(string.format(
       "SELECT zone, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
-      "FROM kills WHERE level = %d AND xp_gained > 0 " ..
+      "FROM kills WHERE level = %d " ..
       "GROUP BY zone ORDER BY xp DESC LIMIT 5", level)) do
       count = count + 1
       ColourNote("white", "", string.format("    %d. %s (%d kills, %s XP)",
@@ -703,7 +703,7 @@ function show_zone_stats(zone_name)
 
       for row in db:nrows(string.format(
          "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, COALESCE(SUM(gold_gained), 0) as gold " ..
-         "FROM kills WHERE zone = %s AND xp_gained > 0", fixsql(zone))) do
+         "FROM kills WHERE zone = %s ", fixsql(zone))) do
 
          if row.cnt > 0 then
             ColourNote("white", "", string.format("  Kills: %s | XP: %s | Gold: %s",
@@ -725,7 +725,7 @@ function show_zone_stats(zone_name)
       -- Level range
       for row in db:nrows(string.format(
          "SELECT MIN(level) as min_lvl, MAX(level) as max_lvl " ..
-         "FROM kills WHERE zone = %s AND xp_gained > 0", fixsql(zone))) do
+         "FROM kills WHERE zone = %s ", fixsql(zone))) do
          if row.min_lvl then
             ColourNote("white", "", string.format("  Level range: %d - %d", row.min_lvl, row.max_lvl))
          end
@@ -736,7 +736,7 @@ function show_zone_stats(zone_name)
       local count = 0
       for row in db:nrows(string.format(
          "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
-         "FROM kills WHERE zone = %s AND xp_gained > 0 " ..
+         "FROM kills WHERE zone = %s " ..
          "GROUP BY mob_name ORDER BY cnt DESC LIMIT 5", fixsql(zone))) do
          count = count + 1
          ColourNote("white", "", string.format("    %d. %s (%d kills, %s XP)",
@@ -760,7 +760,7 @@ function ldb_mob(name, line, wildcards)
       "SELECT mob_name, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, " ..
       "COALESCE(SUM(gold_gained), 0) as gold, COALESCE(SUM(damage_total), 0) as dmg, " ..
       "COALESCE(SUM(rounds), 0) as rnd " ..
-      "FROM kills WHERE mob_name LIKE %s AND xp_gained > 0 " ..
+      "FROM kills WHERE mob_name LIKE %s " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT 10", fixsql(like_pattern))) do
 
       found = true
@@ -775,7 +775,7 @@ function ldb_mob(name, line, wildcards)
       -- Zones where this mob was killed
       local zones = {}
       for zrow in db:nrows(string.format(
-         "SELECT DISTINCT zone FROM kills WHERE mob_name = %s AND xp_gained > 0",
+         "SELECT DISTINCT zone FROM kills WHERE mob_name = %s ",
          fixsql(row.mob_name))) do
          table.insert(zones, zrow.zone)
       end
@@ -801,7 +801,7 @@ function ldb_top_mobs(name, line, wildcards)
    local count = 0
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
-      "FROM kills WHERE xp_gained > 0 " ..
+      "FROM kills " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT %d", limit)) do
       count = count + 1
       ColourNote("white", "", string.format("  %d. %s (%d kills, %s XP)",
@@ -825,7 +825,7 @@ function ldb_top_zones(name, line, wildcards)
    local count = 0
    for row in db:nrows(string.format(
       "SELECT zone, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
-      "FROM kills WHERE xp_gained > 0 " ..
+      "FROM kills " ..
       "GROUP BY zone ORDER BY xp DESC LIMIT %d", limit)) do
       count = count + 1
       ColourNote("white", "", string.format("  %d. %s (%d kills, %s XP)",
@@ -850,7 +850,7 @@ function ldb_top_xp(name, line, wildcards)
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp, " ..
       "CAST(SUM(xp_gained) AS REAL) / COUNT(*) as avg_xp " ..
-      "FROM kills WHERE xp_gained > 0 " ..
+      "FROM kills " ..
       "GROUP BY mob_name HAVING cnt >= 3 " ..
       "ORDER BY avg_xp DESC LIMIT %d", limit)) do
       count = count + 1
@@ -916,10 +916,7 @@ function ldb_db_info(name, line, wildcards)
 
    -- Record counts
    for row in db:nrows("SELECT COUNT(*) as cnt FROM kills") do
-      ColourNote("white", "", "  Total combat records: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM kills WHERE xp_gained > 0") do
-      ColourNote("white", "", "  Confirmed kills: " .. format_number(row.cnt))
+      ColourNote("white", "", "  Kills: " .. format_number(row.cnt))
    end
    for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths") do
       ColourNote("white", "", "  Deaths: " .. format_number(row.cnt))
