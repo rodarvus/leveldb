@@ -223,7 +223,6 @@ local function init_schema()
          gold_gained  INTEGER NOT NULL DEFAULT 0,
          damage_total INTEGER NOT NULL DEFAULT 0,
          rounds       INTEGER NOT NULL DEFAULT 0,
-         duration     INTEGER NOT NULL DEFAULT 0,
          tier         INTEGER,
          remort       INTEGER
       );
@@ -280,8 +279,6 @@ local function open_db()
    db = handle
    db_path = path
 
-   db:exec("PRAGMA journal_mode=WAL;")
-
    if not init_schema() then
       close_db()
       return false
@@ -301,7 +298,6 @@ local function start_fight(enemy_name)
    last_enemypct = nil
 
    fight_start = {
-      time = os.time(),
       tnl = cached_tnl,
       gold = cached_gold,
       level = cached_level,
@@ -336,14 +332,11 @@ local function record_kill()
       gold_gained = cached_gold - fight_start.gold
    end
 
-   -- Calculate duration
-   local duration = os.time() - fight_start.time
-
    -- INSERT kill record
    local query = string.format(
       "INSERT INTO kills (timestamp, mob_name, zone, room_num, room_name, level, " ..
-      "xp_gained, gold_gained, damage_total, rounds, duration, tier, remort) " ..
-      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %d, %d, %s, %s)",
+      "xp_gained, gold_gained, damage_total, rounds, tier, remort) " ..
+      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %d, %s, %s)",
       os.time(),
       fixsql(fight_start.enemy),
       fixsql(fight_start.zone),
@@ -354,7 +347,6 @@ local function record_kill()
       gold_gained,
       damage_total,
       round_count,
-      duration,
       cached_tier and tostring(cached_tier) or "NULL",
       cached_remorts and tostring(cached_remorts) or "NULL"
    )
@@ -515,19 +507,6 @@ local function format_number(n)
 end
 
 -- =============================================================================
--- Helper: format duration (seconds) to human-readable
--- =============================================================================
-local function format_duration(secs)
-   if secs < 60 then
-      return secs .. "s"
-   elseif secs < 3600 then
-      return string.format("%dm %ds", math.floor(secs / 60), secs % 60)
-   else
-      return string.format("%dh %dm %ds", math.floor(secs / 3600), math.floor((secs % 3600) / 60), secs % 60)
-   end
-end
-
--- =============================================================================
 -- Helper: check DB is available for queries
 -- =============================================================================
 local function require_db()
@@ -626,19 +605,17 @@ function show_level_stats(level)
    local total_xp = 0
    local total_gold = 0
    local total_damage = 0
-   local total_duration = 0
    local total_rounds = 0
    local total_deaths = 0
 
    for row in db:nrows(string.format(
       "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, COALESCE(SUM(gold_gained), 0) as gold, " ..
-      "COALESCE(SUM(damage_total), 0) as dmg, COALESCE(SUM(duration), 0) as dur, COALESCE(SUM(rounds), 0) as rnd " ..
+      "COALESCE(SUM(damage_total), 0) as dmg, COALESCE(SUM(rounds), 0) as rnd " ..
       "FROM kills WHERE level = %d AND xp_gained > 0", level)) do
       total_kills = row.cnt
       total_xp = row.xp
       total_gold = row.gold
       total_damage = row.dmg
-      total_duration = row.dur
       total_rounds = row.rnd
    end
 
@@ -656,13 +633,11 @@ function show_level_stats(level)
 
    ColourNote("white", "", string.format("  Kills: %s | XP: %s | Gold: %s",
       format_number(total_kills), format_number(total_xp), format_number(total_gold)))
-   ColourNote("white", "", string.format("  Damage: %s | Rounds: %s | Time: %s",
-      format_number(total_damage), format_number(total_rounds), format_duration(total_duration)))
+   ColourNote("white", "", string.format("  Damage: %s | Rounds: %s",
+      format_number(total_damage), format_number(total_rounds)))
 
    local avg_xp = total_kills > 0 and math.floor(total_xp / total_kills) or 0
-   local avg_dur = total_kills > 0 and math.floor(total_duration / total_kills) or 0
-   ColourNote("white", "", string.format("  Avg XP/kill: %s | Avg duration: %s",
-      format_number(avg_xp), format_duration(avg_dur)))
+   ColourNote("white", "", string.format("  Avg XP/kill: %s", format_number(avg_xp)))
 
    if total_deaths > 0 then
       ColourNote("red", "", "  Deaths: " .. total_deaths)
@@ -727,8 +702,7 @@ function show_zone_stats(zone_name)
       ColourNote("cyan", "", PREFIX .. "Zone: " .. zone)
 
       for row in db:nrows(string.format(
-         "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, COALESCE(SUM(gold_gained), 0) as gold, " ..
-         "COALESCE(SUM(damage_total), 0) as dmg, COALESCE(SUM(duration), 0) as dur, COALESCE(SUM(rounds), 0) as rnd " ..
+         "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, COALESCE(SUM(gold_gained), 0) as gold " ..
          "FROM kills WHERE zone = %s AND xp_gained > 0", fixsql(zone))) do
 
          if row.cnt > 0 then
@@ -736,9 +710,7 @@ function show_zone_stats(zone_name)
                format_number(row.cnt), format_number(row.xp), format_number(row.gold)))
 
             local avg_xp = math.floor(row.xp / row.cnt)
-            local avg_dur = math.floor(row.dur / row.cnt)
-            ColourNote("white", "", string.format("  Avg XP/kill: %s | Avg duration: %s",
-               format_number(avg_xp), format_duration(avg_dur)))
+            ColourNote("white", "", string.format("  Avg XP/kill: %s", format_number(avg_xp)))
          end
       end
 
@@ -787,7 +759,7 @@ function ldb_mob(name, line, wildcards)
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, " ..
       "COALESCE(SUM(gold_gained), 0) as gold, COALESCE(SUM(damage_total), 0) as dmg, " ..
-      "COALESCE(SUM(duration), 0) as dur, COALESCE(SUM(rounds), 0) as rnd " ..
+      "COALESCE(SUM(rounds), 0) as rnd " ..
       "FROM kills WHERE mob_name LIKE %s AND xp_gained > 0 " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT 10", fixsql(like_pattern))) do
 
@@ -796,10 +768,9 @@ function ldb_mob(name, line, wildcards)
          row.mob_name, row.cnt, format_number(row.xp), format_number(row.gold)))
 
       local avg_xp = math.floor(row.xp / row.cnt)
-      local avg_dur = math.floor(row.dur / row.cnt)
       local avg_rnd = row.cnt > 0 and string.format("%.1f", row.rnd / row.cnt) or "0"
-      ColourNote("white", "", string.format("    Avg XP: %s | Avg duration: %s | Avg rounds: %s",
-         format_number(avg_xp), format_duration(avg_dur), avg_rnd))
+      ColourNote("white", "", string.format("    Avg XP: %s | Avg rounds: %s",
+         format_number(avg_xp), avg_rnd))
 
       -- Zones where this mob was killed
       local zones = {}

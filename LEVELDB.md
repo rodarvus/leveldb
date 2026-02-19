@@ -12,11 +12,11 @@ OVERVIEW
 ================================================================================
 LevelDB is a standalone MUSHclient plugin for Aardwolf MUD that records per-kill
 combat data in a persistent SQLite database. It tracks mob kills, XP gains, gold,
-combat duration, damage dealt, rounds fought, and deaths across the character's
+damage dealt, rounds fought, and deaths across the character's
 entire leveling journey.
 
 Key Features:
-- Per-kill records: mob name, zone, room, level, XP, gold, damage, rounds, duration
+- Per-kill records: mob name, zone, room, level, XP, gold, damage, rounds
 - Per-death records: mob, zone, room, level
 - Tier and remort tracked as columns in every record
 - Single database file (leveldb.db) for all data
@@ -34,14 +34,14 @@ BASIC:
 
 QUERIES:
   ldb level [N]           - Kill breakdown for level N (default: current level)
-                            Shows: kills, XP, gold, damage, rounds, time, deaths,
+                            Shows: kills, XP, gold, damage, rounds, deaths,
                             top mobs, zones
   ldb zone [name]         - Stats for a zone (default: current zone)
                             Substring match; shows: kills, XP, gold, avg XP/kill,
-                            avg duration, deaths, level range, top mobs
+                            deaths, level range, top mobs
   ldb mob <name>          - Stats for a mob (substring match, case-insensitive)
-                            Shows: kills, XP, gold, avg XP, avg duration, avg
-                            rounds, zones where killed
+                            Shows: kills, XP, gold, avg XP, avg rounds,
+                            zones where killed
   ldb top mobs [N]        - Top N mobs by kill count (default 10)
   ldb top zones [N]       - Top N zones by total XP (default 10)
   ldb top xp [N]          - Top N mobs by avg XP per kill (default 10)
@@ -74,7 +74,6 @@ Schema:
     gold_gained  INTEGER NOT NULL (0)   -- char.worth.gold delta
     damage_total INTEGER NOT NULL (0)   -- sum of [damage] from text lines
     rounds       INTEGER NOT NULL (0)   -- enemypct change count
-    duration     INTEGER NOT NULL (0)   -- seconds (os.time() granularity)
     tier         INTEGER               -- char.base.tier (nullable)
     remort       INTEGER               -- char.base.remorts (nullable)
 
@@ -104,7 +103,6 @@ Design Decisions:
   all kills in a session remain correct.
 - damage_total sums text trigger [damage] values. This is player damage only
   (mob-to-player damage uses possessive mob name, not "Your").
-- duration has 1-second granularity (os.time()). Acceptable for statistics.
 - room_num and room_name are nullable because GMCP room.info may not have
   arrived yet when combat starts (brief window on connect/reconnect).
 - tier and remort are nullable because char.base may not have arrived yet.
@@ -121,7 +119,7 @@ Transitions:
 
   1. IDLE --> COMBAT:
      When: char.status.enemy becomes non-empty
-     Action: Snapshot fight_start (time, tnl, gold, level, zone, room, enemy)
+     Action: Snapshot fight_start (tnl, gold, level, zone, room, enemy)
              Reset damage_total, round_count, last_enemypct, death_flag
 
   2. COMBAT --> COMBAT (round tick):
@@ -132,7 +130,7 @@ Transitions:
 
   3. COMBAT --> IDLE (kill):
      When: char.status.enemy becomes "" AND death_flag is false
-     Action: Calculate XP/gold/duration, INSERT into kills table, end_combat()
+     Action: Calculate XP/gold, INSERT into kills table, end_combat()
 
   4. COMBAT --> COMBAT (enemy switch):
      When: char.status.enemy changes to a DIFFERENT non-empty name
@@ -256,7 +254,7 @@ Following patterns from aard_GMCP_mapper.xml:
 
 - sqlite3 is a pre-loaded global in MUSHclient (no require needed)
 - Open: sqlite3.open(GetInfo(66) .. "leveldb.db")
-- WAL mode for concurrent read/write: PRAGMA journal_mode=WAL
+- Default journal mode (DELETE) -- no WAL sidecar files
 - Write: db:exec() for INSERT statements
 - Read: db:nrows() for SELECT queries
 - Error checking: dbcheck() validates return codes against sqlite3.OK/ROW/DONE
@@ -274,7 +272,6 @@ All query commands:
 - Check require_db() before executing (ensures DB is open)
 - Use xp_gained > 0 filter for "real kills" (excludes fled/interrupted)
 - Use format_number() for comma-separated large numbers
-- Use format_duration() for human-readable time (12s, 3m 45s, 1h 2m 30s)
 
 Substring matching (ldb zone, ldb mob):
 - Uses SQL LIKE with % wildcards: WHERE zone LIKE '%search%'
@@ -317,11 +314,7 @@ KNOWN LIMITATIONS
    all queries filter with WHERE xp_gained > 0 for "real kills". The raw data
    is preserved for potential future analysis.
 
-4. os.time() granularity:
-   Duration tracking has 1-second resolution. Sub-second precision is not available
-   in standard Lua. Acceptable for aggregate statistics.
-
-5. LIKE wildcard characters in search:
+4. LIKE wildcard characters in search:
    User input to ldb zone/mob is used directly in SQL LIKE patterns without
    escaping % or _ characters. This is acceptable because Aardwolf mob names and
    zone names never contain these characters.
