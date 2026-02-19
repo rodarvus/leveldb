@@ -43,7 +43,7 @@ Requires the **aard_GMCP_handler** plugin (included with the standard Aardwolf M
 
 ## How it works
 
-LevelDB listens to GMCP broadcasts (`char.status`, `char.base`, `char.worth`, `room.info`) to detect combat start/end, track XP and gold deltas, and identify zones and rooms. A text trigger captures damage values from combat output lines. Another trigger detects player death.
+LevelDB listens to GMCP broadcasts (`char.status`, `char.base`, `char.worth`, `room.info`) to detect combat start/end, track XP and gold deltas, and identify zones and rooms. Text triggers capture damage values from combat output lines, detect player death, and identify bonus gold rewards (campaigns, GQ wins) so they are excluded from per-kill gold.
 
 XP per kill is calculated from the TNL (to-next-level) delta between combat start and end, with level-up detection. Gold is calculated from `char.worth.gold` delta. Rounds are counted by tracking `enemypct` changes.
 
