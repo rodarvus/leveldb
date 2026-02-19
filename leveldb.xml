@@ -599,31 +599,24 @@ function ldb_level(name, line, wildcards)
 end
 
 function show_level_stats(level)
-   ColourNote("cyan", "", PREFIX .. "Level " .. level .. " breakdown:")
+   ColourNote("cyan", "", PREFIX .. "Level " .. level .. " kills:")
 
-   local total_kills = 0
-   local total_xp = 0
-   local total_gold = 0
-   local total_damage = 0
-   local total_rounds = 0
-   local total_deaths = 0
-
+   -- Collect all kills into a table for column width calculation
+   local kills = {}
    for row in db:nrows(string.format(
-      "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, COALESCE(SUM(gold_gained), 0) as gold, " ..
-      "COALESCE(SUM(damage_total), 0) as dmg, COALESCE(SUM(rounds), 0) as rnd " ..
-      "FROM kills WHERE level = %d ", level)) do
-      total_kills = row.cnt
-      total_xp = row.xp
-      total_gold = row.gold
-      total_damage = row.dmg
-      total_rounds = row.rnd
+      "SELECT mob_name, zone, xp_gained, gold_gained, damage_total, rounds " ..
+      "FROM kills WHERE level = %d ORDER BY timestamp", level)) do
+      table.insert(kills, row)
    end
 
-   for row in db:nrows(string.format("SELECT COUNT(*) as cnt FROM deaths WHERE level = %d", level)) do
+   -- Death count
+   local total_deaths = 0
+   for row in db:nrows(string.format(
+      "SELECT COUNT(*) as cnt FROM deaths WHERE level = %d", level)) do
       total_deaths = row.cnt
    end
 
-   if total_kills == 0 then
+   if #kills == 0 then
       ColourNote("yellow", "", "  No kills recorded at this level.")
       if total_deaths > 0 then
          ColourNote("red", "", "  Deaths: " .. total_deaths)
@@ -631,40 +624,74 @@ function show_level_stats(level)
       return
    end
 
-   ColourNote("white", "", string.format("  Kills: %s | XP: %s | Gold: %s",
-      format_number(total_kills), format_number(total_xp), format_number(total_gold)))
-   ColourNote("white", "", string.format("  Damage: %s | Rounds: %s",
-      format_number(total_damage), format_number(total_rounds)))
+   -- Calculate column widths from data
+   local max_mob = 3   -- "Mob"
+   local max_zone = 4  -- "Zone"
+   for _, k in ipairs(kills) do
+      if #k.mob_name > max_mob then max_mob = #k.mob_name end
+      if #k.zone > max_zone then max_zone = #k.zone end
+   end
+   -- Cap column widths
+   if max_mob > 24 then max_mob = 24 end
+   if max_zone > 20 then max_zone = 20 end
 
-   local avg_xp = total_kills > 0 and math.floor(total_xp / total_kills) or 0
-   ColourNote("white", "", string.format("  Avg XP/kill: %s", format_number(avg_xp)))
+   -- Row number width
+   local num_w = #tostring(#kills)
+   if num_w < 1 then num_w = 1 end
+
+   -- Helper to truncate strings
+   local function trunc(s, w)
+      if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
+   end
+
+   -- Header
+   local hdr = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3s",
+      "#", "Mob", "Zone", "XP", "Gold", "Dmg", "Rnd")
+   ColourNote("cyan", "", hdr)
+   local sep = "  " .. string.rep("-", num_w) .. "  " .. string.rep("-", max_mob) .. "  " ..
+      string.rep("-", max_zone) .. "  " .. string.rep("-", 7) .. "  " ..
+      string.rep("-", 7) .. "  " .. string.rep("-", 5) .. "  " .. string.rep("-", 3)
+   ColourNote("cyan", "", sep)
+
+   -- Data rows and running totals
+   local total_xp = 0
+   local total_gold = 0
+   local total_damage = 0
+   local total_rounds = 0
+
+   for i, k in ipairs(kills) do
+      total_xp = total_xp + k.xp_gained
+      total_gold = total_gold + k.gold_gained
+      total_damage = total_damage + k.damage_total
+      total_rounds = total_rounds + k.rounds
+
+      local row_str = string.format("  %-" .. num_w .. "d  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3d",
+         i, trunc(k.mob_name, max_mob), trunc(k.zone, max_zone),
+         format_number(k.xp_gained), format_number(k.gold_gained),
+         format_number(k.damage_total), k.rounds)
+      ColourNote("white", "", row_str)
+   end
+
+   -- Footer
+   ColourNote("cyan", "", sep)
+
+   local tot_label = string.format("%d kills", #kills)
+   local tot_str = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3d",
+      "Tot", tot_label, "", format_number(total_xp), format_number(total_gold),
+      format_number(total_damage), total_rounds)
+   ColourNote("white", "", tot_str)
+
+   local avg_xp = math.floor(total_xp / #kills)
+   local avg_gold = math.floor(total_gold / #kills)
+   local avg_dmg = math.floor(total_damage / #kills)
+   local avg_rnd = string.format("%.1f", total_rounds / #kills)
+   local avg_str = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3s",
+      "Avg", "", "", format_number(avg_xp), format_number(avg_gold),
+      format_number(avg_dmg), avg_rnd)
+   ColourNote("white", "", avg_str)
 
    if total_deaths > 0 then
       ColourNote("red", "", "  Deaths: " .. total_deaths)
-   end
-
-   -- Top mobs at this level
-   ColourNote("cyan", "", "  Top mobs:")
-   local count = 0
-   for row in db:nrows(string.format(
-      "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
-      "FROM kills WHERE level = %d " ..
-      "GROUP BY mob_name ORDER BY cnt DESC LIMIT 5", level)) do
-      count = count + 1
-      ColourNote("white", "", string.format("    %d. %s (%d kills, %s XP)",
-         count, row.mob_name, row.cnt, format_number(row.xp)))
-   end
-
-   -- Zones at this level
-   ColourNote("cyan", "", "  Zones:")
-   count = 0
-   for row in db:nrows(string.format(
-      "SELECT zone, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
-      "FROM kills WHERE level = %d " ..
-      "GROUP BY zone ORDER BY xp DESC LIMIT 5", level)) do
-      count = count + 1
-      ColourNote("white", "", string.format("    %d. %s (%d kills, %s XP)",
-         count, row.zone, row.cnt, format_number(row.xp)))
    end
 end
 

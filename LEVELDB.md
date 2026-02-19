@@ -34,8 +34,7 @@ BASIC:
 
 QUERIES:
   ldb level [N]           - Kill breakdown for level N (default: current level)
-                            Shows: kills, XP, gold, damage, rounds, deaths,
-                            top mobs, zones
+                            Tabular per-kill listing with totals and averages
   ldb zone [name]         - Stats for a zone (default: current zone)
                             Substring match; shows: kills, XP, gold, avg XP/kill,
                             deaths, level range, top mobs

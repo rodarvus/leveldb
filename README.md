@@ -22,7 +22,7 @@ The plugin is fully passive — it observes GMCP broadcasts and combat text with
 | `ldb` | Show status |
 | `ldb help` | List all commands |
 | `ldb on` / `ldb off` | Enable/disable data collection |
-| `ldb level [N]` | Kill breakdown for a level (default: current) |
+| `ldb level [N]` | Per-kill table for a level (default: current) |
 | `ldb zone [name]` | Stats for a zone (default: current; substring match) |
 | `ldb mob <name>` | Stats for a mob (substring match) |
 | `ldb top mobs [N]` | Top N mobs by kill count |
