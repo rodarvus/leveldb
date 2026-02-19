@@ -462,9 +462,13 @@ function OnPluginBroadcast(msg, id, name, text)
             start_fight(new_enemy)
 
          else
-            -- Transition 2: COMBAT --> COMBAT (same enemy, check round)
+            -- Transition 2: COMBAT --> COMBAT (same enemy)
             local new_pct = tonumber(status.enemypct)
-            if new_pct and new_pct ~= last_enemypct then
+            if new_pct and last_enemypct and new_pct > last_enemypct then
+               -- Health went UP with same name = previous mob died, new mob engaged
+               record_kill()
+               start_fight(new_enemy)
+            elseif new_pct and new_pct ~= last_enemypct then
                round_count = round_count + 1
                last_enemypct = new_pct
             end
@@ -722,9 +726,11 @@ function show_level_stats(level)
    -- Footer
    ColourNote("cyan", "", sep)
 
-   local tot_label = string.format("%d kills", #kills)
-   local tot_str = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3d",
-      "Tot", tot_label, "", format_number(total_xp), format_number(total_gold),
+   local footer_label_w = num_w + 2 + max_mob  -- # col + gap + mob col
+
+   local tot_str = string.format("  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3d",
+      string.format("Tot %d kills", #kills), "",
+      format_number(total_xp), format_number(total_gold),
       format_number(total_damage), total_rounds)
    ColourNote("white", "", tot_str)
 
@@ -732,8 +738,9 @@ function show_level_stats(level)
    local avg_gold = math.floor(total_gold / #kills)
    local avg_dmg = math.floor(total_damage / #kills)
    local avg_rnd = string.format("%.1f", total_rounds / #kills)
-   local avg_str = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3s",
-      "Avg", "", "", format_number(avg_xp), format_number(avg_gold),
+   local avg_str = string.format("  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3s",
+      "Avg", "",
+      format_number(avg_xp), format_number(avg_gold),
       format_number(avg_dmg), avg_rnd)
    ColourNote("white", "", avg_str)
 

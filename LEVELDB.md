@@ -124,10 +124,16 @@ Transitions:
              Reset damage_total, round_count, last_enemypct, death_flag
 
   2. COMBAT --> COMBAT (round tick):
-     When: char.status.enemypct changes value (same enemy)
+     When: char.status.enemypct changes value (same enemy, health decreasing)
      Action: Increment round_count
      Note: 2-4 identical char.status messages per round are deduplicated
            by comparing enemypct to last_enemypct
+
+  2b. COMBAT --> COMBAT (same-name mob switch):
+     When: char.status.enemy is the same name BUT enemypct increased
+     Action: Record kill for previous mob, start_fight() for new mob
+     Purpose: Consecutive kills of same-name mobs (e.g. "a spawnling" x5)
+              where GMCP never sends enemy="" between kills
 
   3. COMBAT --> IDLE (kill):
      When: char.status.enemy becomes "" AND death_flag is false
