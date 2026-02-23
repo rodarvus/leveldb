@@ -1,24 +1,26 @@
 ================================================================================
 LEVELDB PLUGIN - IMPLEMENTATION GUIDE
 ================================================================================
-Last Updated: 2026-02-19
+Last Updated: 2026-02-23
 Plugin File: leveldb.xml
 Plugin ID: b34c04e52c6c7bced4508230
 Author: Rodarvus
-Current Version: 2.0
+Current Version: 4.0
 
 ================================================================================
 OVERVIEW
 ================================================================================
 LevelDB is a standalone MUSHclient plugin for Aardwolf MUD that records per-kill
-combat data in a persistent SQLite database. It tracks mob kills, XP gains, gold,
-damage dealt, rounds fought, and deaths across the character's
+combat data in a persistent SQLite database. It tracks mob kills, XP gains,
+mob level estimates, damage dealt, rounds fought, and deaths across the character's
 entire leveling journey.
 
 Key Features:
-- Per-kill records: mob name, zone, room, level, XP, gold, damage, rounds
+- Per-kill records: mob name, zone, room, level, XP, mob level, damage, rounds
 - Per-death records: mob, zone, room, level
 - Tier and remort tracked as columns in every record
+- Powerup support: at level 200+ (Hero/Superhero), queries auto-adapt to segment
+  by powerup number instead of level
 - Single database file (leveldb.db) for all data
 - Rich query commands: per-level, per-zone, per-mob breakdowns, top-N rankings
 
@@ -35,13 +37,14 @@ BASIC:
 QUERIES:
   ldb level [N]           - Kill breakdown for level N (default: current level)
                             Tabular per-kill listing with totals and averages
-  ldb thislevel           - Shortcut for ldb level at current level
-  ldb lastlevel           - Shortcut for ldb level at (current level - 1)
+                            At level 200+: N is a powerup number (default: current pup)
+  ldb this                - Shortcut for current level (or current powerup at 200+)
+  ldb last                - Shortcut for previous level (or previous powerup at 200+)
   ldb zone [name]         - Stats for a zone (default: current zone)
-                            Substring match; shows: kills, XP, gold, avg XP/kill,
+                            Substring match; shows: kills, XP, avg XP/kill,
                             deaths, level range, top mobs
   ldb mob <name>          - Stats for a mob (substring match, case-insensitive)
-                            Shows: kills, XP, gold, avg XP, avg rounds,
+                            Shows: kills, XP, avg XP, avg rounds,
                             zones where killed
   ldb top mobs [N]        - Top N mobs by kill count (default 10)
   ldb top zones [N]       - Top N zones by total XP (default 10)
@@ -71,12 +74,13 @@ Schema:
     room_num     INTEGER               -- room.info.num (nullable)
     room_name    TEXT                   -- room.info.name (nullable)
     level        INTEGER NOT NULL       -- player level at combat start
-    xp_gained    INTEGER NOT NULL (0)   -- TNL delta; 0 for mobs that yield no XP
-    gold_gained  INTEGER NOT NULL (0)   -- char.worth.gold delta
-    damage_total INTEGER NOT NULL (0)   -- sum of [damage] from text lines
-    rounds       INTEGER NOT NULL (0)   -- enemypct change count
+    xp_gained    INTEGER NOT NULL DEFAULT 0  -- TNL delta; 0 for mobs that yield no XP
+    damage_total INTEGER NOT NULL DEFAULT 0  -- sum of [damage] from text lines
+    rounds       INTEGER NOT NULL DEFAULT 0  -- enemypct change count
     tier         INTEGER               -- char.base.tier (nullable)
     remort       INTEGER               -- char.base.remorts (nullable)
+    pup          INTEGER               -- char.base.pups (nullable; set at 200+)
+    mob_level    INTEGER               -- estimated from sacrifice gold * 2 (nullable)
 
   deaths:
     id           INTEGER PRIMARY KEY AUTOINCREMENT
@@ -91,7 +95,7 @@ Schema:
 
 Indexes:
   idx_kills_level, idx_kills_zone, idx_kills_mob, idx_kills_timestamp
-  idx_kills_tier, idx_kills_remort
+  idx_kills_tier, idx_kills_remort, idx_kills_pup, idx_kills_mob_level
   idx_deaths_level, idx_deaths_zone, idx_deaths_tier, idx_deaths_remort
 
 Design Decisions:
@@ -99,17 +103,16 @@ Design Decisions:
   All kills are included in queries regardless of xp_gained value.
 - mob_name from char.status.enemy includes articles ("a field mouse"). This is
   acceptable because grouping by mob_name still works correctly.
-- gold_gained excludes bonus gold rewards (campaigns, GQ wins) detected via
-  "Reward of N gold coins added." text trigger. Only corpse loot and autosell
-  gold are attributed to kills.
-- gold_gained may be slightly inaccurate on enemy-switch in multi-mob combat
-  because char.worth arrives after char.status in GMCP sequence. Totals across
-  all kills in a session remain correct.
+- mob_level is estimated from sacrifice gold (gold * 2). Nullable: NULL if no
+  sacrifice message was seen (e.g., autosac off, vampire autoconsume). The formula
+  is approximate. Old records from v3.0 and earlier have mob_level=NULL.
 - damage_total sums text trigger [damage] values. This is player damage only
   (mob-to-player damage uses possessive mob name, not "Your").
 - room_num and room_name are nullable because GMCP room.info may not have
   arrived yet when combat starts (brief window on connect/reconnect).
 - tier and remort are nullable because char.base may not have arrived yet.
+- pup is nullable: NULL for levels 1-199, populated from char.base.pups at 200+.
+  Old records from v2.0 databases have pup=NULL (added via ALTER TABLE migration).
 
 ================================================================================
 COMBAT STATE MACHINE
@@ -123,8 +126,9 @@ Transitions:
 
   1. IDLE --> COMBAT:
      When: char.status.enemy becomes non-empty
-     Action: Snapshot fight_start (tnl, gold, level, zone, room, enemy)
-             Reset damage_total, round_count, last_enemypct, death_flag, bonus_gold
+     Action: Snapshot fight_start (tnl, level, zone, room, enemy, pup)
+             Reset damage_total, round_count, last_enemypct, death_flag,
+             sacrifice_mob_level.
 
   2. COMBAT --> COMBAT (round tick):
      When: char.status.enemypct changes value (same enemy, health decreasing)
@@ -134,30 +138,41 @@ Transitions:
 
   2b. COMBAT --> COMBAT (same-name mob switch):
      When: char.status.enemy is the same name BUT enemypct increased
-     Action: Record kill for previous mob, start_fight() for new mob
+     Action: record_kill() for previous mob, start_fight() for new mob
      Purpose: Consecutive kills of same-name mobs (e.g. "a spawnling" x5)
               where GMCP never sends enemy="" between kills
 
   3. COMBAT --> IDLE (kill):
      When: char.status.enemy becomes "" AND death_flag is false
-     Action: Calculate XP/gold, INSERT into kills table, end_combat()
+     Action: record_kill(), end_combat()
 
   4. COMBAT --> COMBAT (enemy switch):
      When: char.status.enemy changes to a DIFFERENT non-empty name
-     Action: Record kill for PREVIOUS enemy (same as transition 3),
-             then start_fight() for NEW enemy (same as transition 1)
+     Action: record_kill() for PREVIOUS enemy, then start_fight() for NEW enemy
      Purpose: Multi-mob combat where another mob auto-targets after first dies
 
   5. COMBAT --> IDLE (death):
      When: "You die." text trigger fires
      Action: Set death_flag = true, INSERT into deaths table
-             Wait for GMCP enemy="" to clean up (death_flag prevents record_kill)
+             Wait for GMCP enemy="" to clean up (death_flag prevents kill recording)
 
 death_flag Lifecycle:
-  - Set to true by ldb_on_player_death trigger
-  - Prevents record_kill() from firing when subsequent GMCP enemy="" arrives
+  - Set to true by ldb_on_player_death trigger (guarded against double-fire)
+  - Prevents record_kill() path when subsequent GMCP enemy="" arrives
   - Cleared by start_fight() when next combat begins
   - Prevents double-recording (death + kill for same combat)
+
+Kill Recording:
+  record_kill() is called synchronously BEFORE end_combat() or start_fight().
+  It reads fight_start, combat accumulators (damage_total, round_count), and
+  sacrifice_mob_level directly from module-level state, computes XP gained,
+  and INSERTs the kill record into the database.
+
+  The sacrifice text trigger fires on the sacrifice line, which arrives from the
+  server before the GMCP char.status broadcast. So sacrifice_mob_level is already
+  set by the time record_kill() runs. No timer delay is needed.
+
+  After record_kill() returns, end_combat() or start_fight() clears the state.
 
 ================================================================================
 XP CALCULATION
@@ -166,8 +181,15 @@ XP CALCULATION
 Normal kill (same level):
   xp_gained = fight_start.tnl - cached_tnl
 
-Level-up during combat:
+Level-up during combat (1-199):
   xp_gained = fight_start.tnl + (cached_perlevel - cached_tnl)
+
+Powerup during combat (200/201):
+  xp_gained = fight_start.tnl + (cached_perlevel - cached_tnl)
+  Detected when: fight_start.level >= 200 AND cached_tnl > fight_start.tnl
+  At hero/SH, a powerup resets TNL from near-0 back to ~1000 without changing
+  level. The normal formula would produce a negative value (clamped to 0).
+  The powerup branch uses the same math as level-up to handle the TNL reset.
 
 Where cached_perlevel = char.base.perlevel (constant for entire remort).
 Default: 1000. Updated from GMCP char.base broadcasts.
@@ -207,17 +229,26 @@ Why "Your" excludes mob damage: Mob damage lines use the mob's possessive name
 The trigger uses keep_evaluating="y" for compatibility with Aardwolf_Damage_Window.
 
 ================================================================================
-BONUS GOLD EXCLUSION
+MOB LEVEL ESTIMATION (SACRIFICE TRIGGER)
 ================================================================================
 
-Trigger regex: ^\s+Reward of ([\d,]+) gold coins added\.$
+Trigger regex: ^.+ gives you (\d+) gold coins? for .*\.$
 
-Matches the reward line printed on campaign completion, GQ wins, and similar
-events. The captured gold amount is accumulated in bonus_gold and subtracted
-from gold_gained in record_kill(). This ensures per-kill gold reflects only
-corpse loot and autosell, not bulk rewards.
+Matches the sacrifice message from the player's deity (e.g., "Ayla gives you
+100 gold coins for the twisted corpse of a pirate."). The deity name varies by
+clan. Only the gold amount is captured.
 
-bonus_gold is reset in start_fight() and end_combat().
+Formula: mob_level = sacrifice_gold * 2
+
+This is approximate. The exact Aardwolf formula is undocumented. GMCP does not
+provide mob level through any field.
+
+Timing: The sacrifice message arrives as text from the server in the same data
+batch as the kill. MUSHclient processes text triggers on lines as they arrive,
+before GMCP subnegotiation broadcasts. So the sacrifice trigger fires and sets
+sacrifice_mob_level BEFORE the char.status broadcast triggers record_kill().
+
+sacrifice_mob_level is reset in start_fight() and end_combat().
 
 ================================================================================
 GMCP BROADCASTS HANDLED
@@ -226,15 +257,12 @@ GMCP BROADCASTS HANDLED
 char.base:
   - Caches perlevel for XP level-up calculation
   - Caches tier and remort for INSERT columns
+  - Caches pups (powerup count) for powerup segmentation at 200+
 
 char.status:
   - Primary combat state driver (enemy, enemypct, level, tnl)
   - Caches level and tnl (skips sentinel value -1)
   - Runs state machine transitions only when enabled
-
-char.worth:
-  - Caches gold value for delta calculation on combat end
-  - Note: Arrives AFTER char.status in broadcast sequence
 
 room.info:
   - Caches zone, room_num, room_name for kill/death location
@@ -242,8 +270,9 @@ room.info:
 Broadcasts NOT listened to (by design):
   - char.vitals: HP/mana/moves not tracked by LevelDB
   - char.stats: Stats not relevant to kill tracking
+  - char.worth: Gold no longer tracked (removed in v4.0)
   - comm.channel: LevelDB has no interaction detection
-  - comm.quest: Quest XP not tracked in V2
+  - comm.quest: Quest XP not tracked
 
 ================================================================================
 PLUGIN LIFECYCLE
@@ -255,7 +284,7 @@ OnPluginInstall:
   3. Display load message
 
 OnPluginBroadcast (char.base):
-  - Caches perlevel, tier, and remort values from GMCP
+  - Caches perlevel, tier, remort, and pups values from GMCP
 
 OnPluginSaveState:
   - Persists enabled flag (only persistent setting)
@@ -285,7 +314,19 @@ Following patterns from aard_GMCP_mapper.xml:
   returns "NULL" for nil values (matching aard_GMCP_mapper.xml pattern)
 
 Schema Initialization:
-  init_schema() creates tables and indexes with IF NOT EXISTS on database open.
+  open_db() runs three steps in order:
+  1. init_tables() - CREATE TABLE IF NOT EXISTS (no indexes)
+  2. run_migrations() - ALTER TABLE for new columns (errors silently ignored)
+  3. init_indexes() - CREATE INDEX IF NOT EXISTS (all columns now exist)
+
+  This ordering ensures migrations add columns before indexes reference them.
+  (v3.0 had a bug where idx_kills_pup was created before the pup column existed.)
+
+Schema Migrations:
+  - v2.0 -> v3.0: ALTER TABLE kills ADD COLUMN pup INTEGER
+  - v3.0 -> v4.0: ALTER TABLE kills ADD COLUMN mob_level INTEGER
+  Errors from "duplicate column name" are silently ignored. Old records retain
+  NULL for new columns.
 
 ================================================================================
 QUERY IMPLEMENTATION NOTES
@@ -301,6 +342,14 @@ Substring matching (ldb zone, ldb mob):
 - Case-insensitive by default in SQLite
 - Aardwolf mob/zone names never contain SQL LIKE wildcards (% or _),
   so no escaping is needed
+
+Powerup auto-adapt (ldb level, ldb this, ldb last):
+- When cached_level >= 200, these commands query by powerup number instead of level
+- ldb level [N]: N is a powerup number (default: current cached_pups)
+- ldb this: shows kills for current powerup (WHERE level=200 AND pup=N)
+- ldb last: shows kills for previous powerup (pup=N-1)
+- show_level_stats(level, pup) adds AND pup=N to WHERE clause when pup is provided
+- Header displays "Powerup N kills:" instead of "Level N kills:"
 
 ldb top xp:
 - Uses HAVING cnt >= 3 to exclude one-off kills that skew averages
@@ -322,22 +371,17 @@ It never sends commands to the MUD. No conflict with:
 KNOWN LIMITATIONS
 ================================================================================
 
-1. Gold attribution in multi-mob combat:
-   char.worth arrives AFTER char.status. On enemy switch, gold from the just-killed
-   mob may not yet be reflected. Gold gets attributed to the next mob instead.
-   Totals across all kills remain correct. Accepted as approximate.
-
-2. Multi-level-up in one kill:
+1. Multi-level-up in one kill:
    XP formula handles exactly one level-up. If a single kill grants enough XP for
    two level-ups (extraordinarily rare), the calculation will be short. Same
    limitation as stats_tracker.xml.
 
-3. Zero-XP kills in kills table:
+2. Zero-XP kills in kills table:
    Kills yielding 0 XP (low-level mobs, fled/interrupted combats) are recorded
    and included in all queries. This is by design -- LevelDB serves as a
    historical fight log, not just an XP tracker.
 
-4. LIKE wildcard characters in search:
+3. LIKE wildcard characters in search:
    User input to ldb zone/mob is used directly in SQL LIKE patterns without
    escaping % or _ characters. This is acceptable because Aardwolf mob names and
    zone names never contain these characters.
@@ -362,7 +406,7 @@ Documentation:
   - README.md - user documentation
 
 ================================================================================
-FUTURE CONSIDERATIONS (NOT IN V2)
+FUTURE CONSIDERATIONS (NOT IN V4)
 ================================================================================
 
 - Session tracking / XP-per-hour calculation

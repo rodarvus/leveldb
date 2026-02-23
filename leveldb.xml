@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="2.0"
+   version="4.0"
    save_state="y"
    >
 
@@ -57,14 +57,14 @@
       script="ldb_level"
    ></alias>
    <alias
-      match="^ldb thislevel$"
+      match="^ldb this$"
       enabled="y"
       regexp="y"
       sequence="100"
       script="ldb_thislevel"
    ></alias>
    <alias
-      match="^ldb lastlevel$"
+      match="^ldb last$"
       enabled="y"
       regexp="y"
       sequence="100"
@@ -149,14 +149,14 @@
       sequence="100"
    ></trigger>
 
-   <!-- Bonus gold reward (campaigns, GQ wins, etc.) -->
+   <!-- Sacrifice message: deity gives gold for corpse. Mob level = gold * 2 -->
    <trigger
-      match="^\s+Reward of ([\d,]+) gold coins added\.$"
+      match="^.+ gives you (\d+) gold coins? for .*\.$"
       enabled="y"
       regexp="y"
       keep_evaluating="y"
       omit_from_output="n"
-      script="ldb_on_bonus_gold"
+      script="ldb_on_sacrifice"
       sequence="100"
    ></trigger>
 </triggers>
@@ -190,10 +190,10 @@ local db_path = nil         -- Full path to database
 -- =============================================================================
 local cached_tier = nil
 local cached_remorts = nil
+local cached_pups = nil
 local cached_perlevel = 1000
 local cached_level = nil
 local cached_tnl = nil
-local cached_gold = nil
 local cached_zone = nil
 local cached_room_num = nil
 local cached_room_name = nil
@@ -204,11 +204,11 @@ local cached_enemy = ""
 -- =============================================================================
 local in_combat = false
 local death_flag = false
-local fight_start = nil     -- Snapshot at combat start: {tnl, gold, level, zone, room_num, room_name, enemy}
+local fight_start = nil     -- Snapshot at combat start: {tnl, level, zone, room_num, room_name, enemy, pup}
 local damage_total = 0      -- Accumulated damage from [damage] lines this fight
 local round_count = 0       -- Number of enemypct changes this fight
 local last_enemypct = nil   -- For dedup of multiple char.status per round
-local bonus_gold = 0        -- Bonus gold rewards to exclude from kill gold (campaigns, GQ)
+local sacrifice_mob_level = nil  -- Estimated mob level from sacrifice gold * 2
 
 -- =============================================================================
 -- Database helpers (following aard_GMCP_mapper.xml patterns)
@@ -234,9 +234,9 @@ local function fixsql(s)
 end
 
 -- =============================================================================
--- Schema initialization
+-- Schema initialization (split into tables, migrations, indexes)
 -- =============================================================================
-local function init_schema()
+local function init_tables()
    local sql = [[
       CREATE TABLE IF NOT EXISTS kills (
          id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,11 +247,12 @@ local function init_schema()
          room_name    TEXT,
          level        INTEGER NOT NULL,
          xp_gained    INTEGER NOT NULL DEFAULT 0,
-         gold_gained  INTEGER NOT NULL DEFAULT 0,
          damage_total INTEGER NOT NULL DEFAULT 0,
          rounds       INTEGER NOT NULL DEFAULT 0,
          tier         INTEGER,
-         remort       INTEGER
+         remort       INTEGER,
+         pup          INTEGER,
+         mob_level    INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS deaths (
@@ -265,20 +266,36 @@ local function init_schema()
          tier         INTEGER,
          remort       INTEGER
       );
+   ]]
+   db:exec(sql)
+   return not dbcheck(db:errcode(), db:errmsg(), "init_tables")
+end
 
+local function run_migrations()
+   -- Migration: add pup column (v2.0 -> v3.0)
+   db:exec("ALTER TABLE kills ADD COLUMN pup INTEGER")
+   -- Migration: add mob_level column (v3.0 -> v4.0)
+   db:exec("ALTER TABLE kills ADD COLUMN mob_level INTEGER")
+   -- Errors from "duplicate column name" are silently ignored
+end
+
+local function init_indexes()
+   local sql = [[
       CREATE INDEX IF NOT EXISTS idx_kills_level ON kills(level);
       CREATE INDEX IF NOT EXISTS idx_kills_zone ON kills(zone);
       CREATE INDEX IF NOT EXISTS idx_kills_mob ON kills(mob_name);
       CREATE INDEX IF NOT EXISTS idx_kills_timestamp ON kills(timestamp);
       CREATE INDEX IF NOT EXISTS idx_kills_tier ON kills(tier);
       CREATE INDEX IF NOT EXISTS idx_kills_remort ON kills(remort);
+      CREATE INDEX IF NOT EXISTS idx_kills_pup ON kills(pup);
+      CREATE INDEX IF NOT EXISTS idx_kills_mob_level ON kills(mob_level);
       CREATE INDEX IF NOT EXISTS idx_deaths_level ON deaths(level);
       CREATE INDEX IF NOT EXISTS idx_deaths_zone ON deaths(zone);
       CREATE INDEX IF NOT EXISTS idx_deaths_tier ON deaths(tier);
       CREATE INDEX IF NOT EXISTS idx_deaths_remort ON deaths(remort);
    ]]
    db:exec(sql)
-   return not dbcheck(db:errcode(), db:errmsg(), "init_schema")
+   return not dbcheck(db:errcode(), db:errmsg(), "init_indexes")
 end
 
 -- =============================================================================
@@ -308,7 +325,14 @@ local function open_db()
    db = handle
    db_path = path
 
-   if not init_schema() then
+   if not init_tables() then
+      close_db()
+      return false
+   end
+
+   run_migrations()
+
+   if not init_indexes() then
       close_db()
       return false
    end
@@ -325,16 +349,16 @@ local function start_fight(enemy_name)
    damage_total = 0
    round_count = 0
    last_enemypct = nil
-   bonus_gold = 0
+   sacrifice_mob_level = nil
 
    fight_start = {
       tnl = cached_tnl,
-      gold = cached_gold,
       level = cached_level,
       zone = cached_zone or "Unknown",
       room_num = cached_room_num,
       room_name = cached_room_name,
       enemy = enemy_name,
+      pup = cached_pups,
    }
 end
 
@@ -347,26 +371,22 @@ local function record_kill()
    local xp_gained = 0
    if fight_start.tnl and cached_tnl and fight_start.level and cached_level then
       if cached_level > fight_start.level then
-         -- Leveled up during combat
+         -- Leveled up during combat (1-199)
+         xp_gained = fight_start.tnl + (cached_perlevel - cached_tnl)
+      elseif fight_start.level >= 200 and cached_tnl > fight_start.tnl then
+         -- Powerup during combat (200/201: TNL reset without level change)
          xp_gained = fight_start.tnl + (cached_perlevel - cached_tnl)
       elseif cached_level == fight_start.level then
-         -- Normal kill
+         -- Normal kill (same level/pup, no reset)
          xp_gained = fight_start.tnl - cached_tnl
       end
       if xp_gained < 0 then xp_gained = 0 end
    end
 
-   -- Calculate gold gained (excluding bonus rewards like campaigns/GQ)
-   local gold_gained = 0
-   if fight_start.gold and cached_gold then
-      gold_gained = cached_gold - fight_start.gold - bonus_gold
-   end
-
-   -- INSERT kill record
    local query = string.format(
       "INSERT INTO kills (timestamp, mob_name, zone, room_num, room_name, level, " ..
-      "xp_gained, gold_gained, damage_total, rounds, tier, remort) " ..
-      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %d, %s, %s)",
+      "xp_gained, damage_total, rounds, tier, remort, pup, mob_level) " ..
+      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %s, %s, %s, %s)",
       os.time(),
       fixsql(fight_start.enemy),
       fixsql(fight_start.zone),
@@ -374,11 +394,12 @@ local function record_kill()
       fixsql(fight_start.room_name),
       fight_start.level or 0,
       xp_gained,
-      gold_gained,
       damage_total,
       round_count,
       cached_tier and tostring(cached_tier) or "NULL",
-      cached_remorts and tostring(cached_remorts) or "NULL"
+      cached_remorts and tostring(cached_remorts) or "NULL",
+      fight_start.pup and tostring(fight_start.pup) or "NULL",
+      sacrifice_mob_level and tostring(sacrifice_mob_level) or "NULL"
    )
 
    db:exec(query)
@@ -414,8 +435,9 @@ local function end_combat()
    damage_total = 0
    round_count = 0
    last_enemypct = nil
-   bonus_gold = 0
+   sacrifice_mob_level = nil
 end
+
 
 -- =============================================================================
 -- GMCP broadcast handler
@@ -429,6 +451,7 @@ function OnPluginBroadcast(msg, id, name, text)
          if base.perlevel then cached_perlevel = tonumber(base.perlevel) or 1000 end
          if base.tier then cached_tier = tonumber(base.tier) end
          if base.remorts then cached_remorts = tonumber(base.remorts) end
+         if base.pups then cached_pups = tonumber(base.pups) end
       end
 
    elseif text == "char.status" then
@@ -491,13 +514,6 @@ function OnPluginBroadcast(msg, id, name, text)
 
       cached_enemy = new_enemy
 
-   elseif text == "char.worth" then
-      local worth = gmcp("char.worth")
-      if worth then
-         local new_gold = tonumber(worth.gold)
-         if new_gold then cached_gold = new_gold end
-      end
-
    elseif text == "room.info" then
       local room = gmcp("room.info")
       if room then
@@ -523,17 +539,18 @@ end
 
 function ldb_on_player_death(name, line, wildcards)
    if not enabled then return end
+   if death_flag then return end  -- Guard against double-fire
 
    death_flag = true
    record_death()
 end
 
-function ldb_on_bonus_gold(name, line, wildcards)
+function ldb_on_sacrifice(name, line, wildcards)
    if not enabled then return end
 
-   local amount = tonumber((string.gsub(wildcards[1], ",", "")))
-   if amount then
-      bonus_gold = bonus_gold + amount
+   local gold = tonumber(wildcards[1])
+   if gold then
+      sacrifice_mob_level = gold * 2
    end
 end
 
@@ -584,6 +601,12 @@ function ldb_status(name, line, wildcards)
 
    if cached_level then
       ColourNote("cyan", "", "  Current level: " .. cached_level)
+      if cached_level >= 200 and cached_pups then
+         ColourNote("cyan", "", "  Current powerup: " .. cached_pups)
+         if cached_tnl and cached_perlevel then
+            ColourNote("cyan", "", "  TNL: " .. cached_tnl .. " / " .. cached_perlevel)
+         end
+      end
    end
    if cached_zone then
       ColourNote("cyan", "", "  Current zone: " .. cached_zone)
@@ -603,8 +626,9 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb help                - Show this help")
    ColourNote("cyan", "", "  ldb on / off            - Enable/disable data collection")
    ColourNote("cyan", "", "  ldb level [N]           - Kill breakdown for level N (default: current)")
-   ColourNote("cyan", "", "  ldb thislevel           - Kill breakdown for current level")
-   ColourNote("cyan", "", "  ldb lastlevel           - Kill breakdown for previous level")
+   ColourNote("cyan", "", "                            At 200+: N is powerup number")
+   ColourNote("cyan", "", "  ldb this                - Kill breakdown for current level/powerup")
+   ColourNote("cyan", "", "  ldb last                - Kill breakdown for previous level/powerup")
    ColourNote("cyan", "", "  ldb zone [name]         - Stats for a zone (default: current)")
    ColourNote("cyan", "", "  ldb mob <name>          - Stats for a mob (substring match)")
    ColourNote("cyan", "", "  ldb top mobs [N]        - Top N mobs by kill count (default 10)")
@@ -633,15 +657,25 @@ end
 -- =============================================================================
 function ldb_level(name, line, wildcards)
    if not require_db() then return end
-   local level = tonumber(wildcards[1])
-   if not level then
-      level = cached_level
+   local arg = tonumber(wildcards[1])
+
+   if cached_level and cached_level >= 200 then
+      -- Powerup mode: argument is a powerup number (default: current pup)
+      local pup = arg or cached_pups
+      if not pup then
+         ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
+         return
+      end
+      show_level_stats(cached_level, pup)
+   else
+      -- Normal mode: argument is a level number (default: current level)
+      local level = arg or cached_level
       if not level then
          ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
          return
       end
+      show_level_stats(level)
    end
-   show_level_stats(level)
 end
 
 -- =============================================================================
@@ -653,7 +687,15 @@ function ldb_thislevel(name, line, wildcards)
       ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
       return
    end
-   show_level_stats(cached_level)
+   if cached_level >= 200 then
+      if not cached_pups then
+         ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
+         return
+      end
+      show_level_stats(cached_level, cached_pups)
+   else
+      show_level_stats(cached_level)
+   end
 end
 
 -- =============================================================================
@@ -665,33 +707,64 @@ function ldb_lastlevel(name, line, wildcards)
       ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
       return
    end
-   if cached_level <= 1 then
-      ColourNote("yellow", "", PREFIX .. "No previous level.")
-      return
+   if cached_level >= 200 then
+      if not cached_pups then
+         ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
+         return
+      end
+      if cached_pups <= 0 then
+         ColourNote("yellow", "", PREFIX .. "No previous powerup.")
+         return
+      end
+      show_level_stats(cached_level, cached_pups - 1)
+   else
+      if cached_level <= 1 then
+         ColourNote("yellow", "", PREFIX .. "No previous level.")
+         return
+      end
+      show_level_stats(cached_level - 1)
    end
-   show_level_stats(cached_level - 1)
 end
 
-function show_level_stats(level)
-   ColourNote("cyan", "", PREFIX .. "Level " .. level .. " kills:")
+function show_level_stats(level, pup)
+   -- Header adapts for powerup mode
+   if pup then
+      ColourNote("cyan", "", PREFIX .. "Powerup " .. pup .. " kills:")
+   else
+      ColourNote("cyan", "", PREFIX .. "Level " .. level .. " kills:")
+   end
+
+   -- Build query with optional pup filter
+   local kills_query, deaths_query
+   if pup then
+      kills_query = string.format(
+         "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level " ..
+         "FROM kills WHERE level = %d AND pup = %d ORDER BY timestamp", level, pup)
+      deaths_query = string.format(
+         "SELECT COUNT(*) as cnt FROM deaths WHERE level = %d", level)
+   else
+      kills_query = string.format(
+         "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level " ..
+         "FROM kills WHERE level = %d ORDER BY timestamp", level)
+      deaths_query = string.format(
+         "SELECT COUNT(*) as cnt FROM deaths WHERE level = %d", level)
+   end
 
    -- Collect all kills into a table for column width calculation
    local kills = {}
-   for row in db:nrows(string.format(
-      "SELECT mob_name, zone, xp_gained, gold_gained, damage_total, rounds " ..
-      "FROM kills WHERE level = %d ORDER BY timestamp", level)) do
+   for row in db:nrows(kills_query) do
       table.insert(kills, row)
    end
 
    -- Death count
    local total_deaths = 0
-   for row in db:nrows(string.format(
-      "SELECT COUNT(*) as cnt FROM deaths WHERE level = %d", level)) do
+   for row in db:nrows(deaths_query) do
       total_deaths = row.cnt
    end
 
+   local no_kills_msg = pup and "  No kills recorded for this powerup." or "  No kills recorded at this level."
    if #kills == 0 then
-      ColourNote("yellow", "", "  No kills recorded at this level.")
+      ColourNote("yellow", "", no_kills_msg)
       if total_deaths > 0 then
          ColourNote("red", "", "  Deaths: " .. total_deaths)
       end
@@ -719,30 +792,29 @@ function show_level_stats(level)
    end
 
    -- Header
-   local hdr = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3s",
-      "#", "Mob", "Zone", "XP", "Gold", "Dmg", "Rnd")
+   local hdr = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s",
+      "#", "Mob", "Zone", "XP", "Dmg", "Rnd", "MLvl")
    ColourNote("cyan", "", hdr)
    local sep = "  " .. string.rep("-", num_w) .. "  " .. string.rep("-", max_mob) .. "  " ..
       string.rep("-", max_zone) .. "  " .. string.rep("-", 7) .. "  " ..
-      string.rep("-", 7) .. "  " .. string.rep("-", 5) .. "  " .. string.rep("-", 3)
+      string.rep("-", 5) .. "  " .. string.rep("-", 3) .. "  " .. string.rep("-", 4)
    ColourNote("cyan", "", sep)
 
    -- Data rows and running totals
    local total_xp = 0
-   local total_gold = 0
    local total_damage = 0
    local total_rounds = 0
 
    for i, k in ipairs(kills) do
       total_xp = total_xp + k.xp_gained
-      total_gold = total_gold + k.gold_gained
       total_damage = total_damage + k.damage_total
       total_rounds = total_rounds + k.rounds
 
-      local row_str = string.format("  %-" .. num_w .. "d  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3d",
+      local mlvl_str = k.mob_level and tostring(k.mob_level) or "-"
+      local row_str = string.format("  %-" .. num_w .. "d  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s",
          i, trunc(k.mob_name, max_mob), trunc(k.zone, max_zone),
-         format_number(k.xp_gained), format_number(k.gold_gained),
-         format_number(k.damage_total), k.rounds)
+         format_number(k.xp_gained),
+         format_number(k.damage_total), k.rounds, mlvl_str)
       ColourNote("white", "", row_str)
    end
 
@@ -751,20 +823,19 @@ function show_level_stats(level)
 
    local footer_label_w = num_w + 2 + max_mob  -- # col + gap + mob col
 
-   local tot_str = string.format("  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3d",
+   local tot_str = string.format("  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s",
       string.format("Tot %d kills", #kills), "",
-      format_number(total_xp), format_number(total_gold),
-      format_number(total_damage), total_rounds)
+      format_number(total_xp),
+      format_number(total_damage), total_rounds, "")
    ColourNote("white", "", tot_str)
 
    local avg_xp = math.floor(total_xp / #kills)
-   local avg_gold = math.floor(total_gold / #kills)
    local avg_dmg = math.floor(total_damage / #kills)
    local avg_rnd = string.format("%.1f", total_rounds / #kills)
-   local avg_str = string.format("  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %7s  %5s  %3s",
+   local avg_str = string.format("  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s",
       "Avg", "",
-      format_number(avg_xp), format_number(avg_gold),
-      format_number(avg_dmg), avg_rnd)
+      format_number(avg_xp),
+      format_number(avg_dmg), avg_rnd, "")
    ColourNote("white", "", avg_str)
 
    if total_deaths > 0 then
@@ -806,12 +877,12 @@ function show_zone_stats(zone_name)
       ColourNote("cyan", "", PREFIX .. "Zone: " .. zone)
 
       for row in db:nrows(string.format(
-         "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, COALESCE(SUM(gold_gained), 0) as gold " ..
+         "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp " ..
          "FROM kills WHERE zone = %s ", fixsql(zone))) do
 
          if row.cnt > 0 then
-            ColourNote("white", "", string.format("  Kills: %s | XP: %s | Gold: %s",
-               format_number(row.cnt), format_number(row.xp), format_number(row.gold)))
+            ColourNote("white", "", string.format("  Kills: %s | XP: %s",
+               format_number(row.cnt), format_number(row.xp)))
 
             local avg_xp = math.floor(row.xp / row.cnt)
             ColourNote("white", "", string.format("  Avg XP/kill: %s", format_number(avg_xp)))
@@ -862,14 +933,14 @@ function ldb_mob(name, line, wildcards)
    local found = false
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, " ..
-      "COALESCE(SUM(gold_gained), 0) as gold, COALESCE(SUM(damage_total), 0) as dmg, " ..
+      "COALESCE(SUM(damage_total), 0) as dmg, " ..
       "COALESCE(SUM(rounds), 0) as rnd " ..
       "FROM kills WHERE mob_name LIKE %s " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT 10", fixsql(like_pattern))) do
 
       found = true
-      ColourNote("white", "", string.format("  %s: %d kills, %s XP, %s gold",
-         row.mob_name, row.cnt, format_number(row.xp), format_number(row.gold)))
+      ColourNote("white", "", string.format("  %s: %d kills, %s XP",
+         row.mob_name, row.cnt, format_number(row.xp)))
 
       local avg_xp = math.floor(row.xp / row.cnt)
       local avg_rnd = row.cnt > 0 and string.format("%.1f", row.rnd / row.cnt) or "0"
