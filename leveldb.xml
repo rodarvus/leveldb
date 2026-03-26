@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="5.0"
+   version="6.0"
    save_state="y"
    >
 
@@ -127,6 +127,20 @@
       script="ldb_tier"
    ></alias>
    <alias
+      match="^ldb quests?$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_quests"
+   ></alias>
+   <alias
+      match="^ldb (?:cps?|campaigns?)$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_campaigns"
+   ></alias>
+   <alias
       match="^ldb db$"
       enabled="y"
       regexp="y"
@@ -173,6 +187,162 @@
       script="ldb_on_sacrifice"
       sequence="100"
    ></trigger>
+
+   <!-- ============================================================ -->
+   <!-- Campaign triggers (always-on, don't gag)                     -->
+   <!-- ============================================================ -->
+
+   <!-- Campaign start: questmaster says "Good luck" -->
+   <trigger
+      name="trg_ldb_cp_start"
+      match="^(.+) tells you 'Good luck in your campaign!'$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_cp_start"
+      sequence="100"
+   ></trigger>
+
+   <!-- Campaign mob killed -->
+   <trigger
+      name="trg_ldb_cp_mob_killed"
+      match="^Congratulations, that was one of your CAMPAIGN mobs!$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_cp_mob_killed"
+      sequence="100"
+   ></trigger>
+
+   <!-- Campaign completed -->
+   <trigger
+      name="trg_ldb_cp_complete"
+      match="CONGRATULATIONS! You have completed your campaign."
+      enabled="y"
+      regexp="n"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_cp_complete"
+      sequence="100"
+   ></trigger>
+
+   <!-- Campaign quit -->
+   <trigger
+      name="trg_ldb_cp_quit"
+      match="^Campaign cleared\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_cp_quit"
+      sequence="100"
+   ></trigger>
+
+   <!-- ============================================================ -->
+   <!-- Silent cp check parsing triggers (disabled, gag output)      -->
+   <!-- ============================================================ -->
+
+   <!-- No active campaign response -->
+   <trigger
+      name="trg_ldb_cp_none"
+      match="You are not currently on a campaign."
+      enabled="n"
+      regexp="n"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_cp_none"
+      sequence="90"
+   ></trigger>
+
+   <!-- cp check mob line -->
+   <trigger
+      name="trg_ldb_cp_mob_line"
+      match="^You still have to kill \* (.+) \((.+?)( - Dead)?\)\.?$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="n"
+      omit_from_output="y"
+      script="ldb_on_cp_mob_line"
+      sequence="90"
+   ></trigger>
+
+   <!-- cp check end of mob list (negative lookahead) -->
+   <trigger
+      name="trg_ldb_cp_mob_end"
+      match="^(?!You still have to kill \*)"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_cp_mob_end"
+      sequence="91"
+   ></trigger>
+
+   <!-- cp check time remaining -->
+   <trigger
+      name="trg_ldb_cp_time"
+      match="^You have (.+) left to finish this campaign\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_cp_gag"
+      sequence="90"
+   ></trigger>
+
+   <!-- cp check note lines -->
+   <trigger
+      name="trg_ldb_cp_note"
+      match="^Note: "
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_cp_gag"
+      sequence="90"
+   ></trigger>
+
+   <!-- cp check "may take campaign" / "must level" -->
+   <trigger
+      name="trg_ldb_cp_postnote"
+      match="^You (?:may take a campaign at this level|will have to level before you can go on another campaign)\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_cp_gag"
+      sequence="90"
+   ></trigger>
+
+   <!-- ============================================================ -->
+   <!-- Campaign reward parsing triggers (disabled, don't gag)       -->
+   <!-- ============================================================ -->
+
+   <!-- Reward line -->
+   <trigger
+      name="trg_ldb_cp_reward"
+      match="^\s*Reward of ([\d,]+) (.+) added\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_cp_reward"
+      sequence="90"
+   ></trigger>
+
+   <!-- Closing separator (end of reward block) -->
+   <trigger
+      name="trg_ldb_cp_reward_end"
+      match="^-{20,}$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_cp_reward_end"
+      sequence="90"
+   ></trigger>
 </triggers>
 
 
@@ -212,6 +382,15 @@ local cached_zone = nil
 local cached_room_num = nil
 local cached_room_name = nil
 local cached_enemy = ""
+
+-- =============================================================================
+-- Quest/Campaign tracking state
+-- =============================================================================
+local active_quest_id = nil        -- DB id of open quest (nil if none)
+local active_campaign_id = nil     -- DB id of open campaign (nil if none)
+local cp_parsing = false           -- true while parsing cp check mob list
+local cp_reward_parsing = false    -- true while parsing campaign reward lines
+local cp_mob_buffer = {}           -- temp buffer for mob list during cp check parse
 
 -- =============================================================================
 -- Combat tracking state
@@ -280,6 +459,48 @@ local function init_tables()
          tier         INTEGER,
          remort       INTEGER
       );
+
+      CREATE TABLE IF NOT EXISTS quests (
+         id           INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp    INTEGER NOT NULL,
+         level        INTEGER NOT NULL,
+         tier         INTEGER,
+         remort       INTEGER,
+         mob_name     TEXT,
+         area         TEXT,
+         room         TEXT,
+         timer        INTEGER,
+         result       TEXT,
+         duration     INTEGER,
+         qp           INTEGER,
+         gold         INTEGER,
+         tp           INTEGER,
+         trains       INTEGER,
+         pracs        INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS campaigns (
+         id           INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp    INTEGER NOT NULL,
+         level        INTEGER NOT NULL,
+         tier         INTEGER,
+         remort       INTEGER,
+         result       TEXT,
+         duration     INTEGER,
+         mob_count    INTEGER,
+         qp           INTEGER,
+         gold         INTEGER,
+         tp           INTEGER,
+         trains       INTEGER,
+         pracs        INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS campaign_mobs (
+         id           INTEGER PRIMARY KEY AUTOINCREMENT,
+         campaign_id  INTEGER NOT NULL REFERENCES campaigns(id),
+         mob_name     TEXT NOT NULL,
+         area         TEXT
+      );
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_tables")
@@ -307,6 +528,13 @@ local function init_indexes()
       CREATE INDEX IF NOT EXISTS idx_deaths_zone ON deaths(zone);
       CREATE INDEX IF NOT EXISTS idx_deaths_tier ON deaths(tier);
       CREATE INDEX IF NOT EXISTS idx_deaths_remort ON deaths(remort);
+      CREATE INDEX IF NOT EXISTS idx_quests_level ON quests(level);
+      CREATE INDEX IF NOT EXISTS idx_quests_tier ON quests(tier);
+      CREATE INDEX IF NOT EXISTS idx_quests_remort ON quests(remort);
+      CREATE INDEX IF NOT EXISTS idx_campaigns_level ON campaigns(level);
+      CREATE INDEX IF NOT EXISTS idx_campaigns_tier ON campaigns(tier);
+      CREATE INDEX IF NOT EXISTS idx_campaigns_remort ON campaigns(remort);
+      CREATE INDEX IF NOT EXISTS idx_campaign_mobs_cid ON campaign_mobs(campaign_id);
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_indexes")
@@ -535,6 +763,12 @@ function OnPluginBroadcast(msg, id, name, text)
          cached_room_num = tonumber(room.num)
          cached_room_name = room.name
       end
+
+   elseif text == "comm.quest" then
+      local quest_data = gmcp("comm.quest")
+      if quest_data then
+         handle_quest(quest_data)
+      end
    end
 end
 
@@ -566,6 +800,324 @@ function ldb_on_sacrifice(name, line, wildcards)
    if gold then
       sacrifice_mob_level = gold * 2
    end
+end
+
+-- =============================================================================
+-- Quest/Campaign: close open quest/campaign as 'unknown'
+-- =============================================================================
+local function close_open_quest()
+   if not active_quest_id or not db then return end
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE quests SET result = 'unknown', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_quest_id))
+   dbcheck(db:errcode(), db:errmsg(), "close_open_quest")
+   active_quest_id = nil
+end
+
+local function close_open_campaign()
+   if not active_campaign_id or not db then return end
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE campaigns SET result = 'unknown', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_campaign_id))
+   dbcheck(db:errcode(), db:errmsg(), "close_open_campaign")
+   active_campaign_id = nil
+end
+
+-- =============================================================================
+-- Quest/Campaign: cp check silent parsing helpers
+-- =============================================================================
+local function enable_cp_parsing()
+   cp_parsing = true
+   cp_mob_buffer = {}
+   EnableTrigger("trg_ldb_cp_none", true)
+   EnableTrigger("trg_ldb_cp_mob_line", true)
+   EnableTrigger("trg_ldb_cp_mob_end", false)  -- enabled on first mob line
+   EnableTrigger("trg_ldb_cp_time", true)
+   EnableTrigger("trg_ldb_cp_note", true)
+   EnableTrigger("trg_ldb_cp_postnote", true)
+end
+
+local function disable_cp_parsing()
+   cp_parsing = false
+   EnableTrigger("trg_ldb_cp_none", false)
+   EnableTrigger("trg_ldb_cp_mob_line", false)
+   EnableTrigger("trg_ldb_cp_mob_end", false)
+   EnableTrigger("trg_ldb_cp_time", false)
+   EnableTrigger("trg_ldb_cp_note", false)
+   EnableTrigger("trg_ldb_cp_postnote", false)
+end
+
+local function send_silent_cp_check()
+   enable_cp_parsing()
+   SendNoEcho("cp check")
+end
+
+local function flush_cp_mob_buffer()
+   if not active_campaign_id or not db then return end
+   if #cp_mob_buffer == 0 then return end
+
+   -- Delete old mobs for this campaign and re-insert (cp check gives full list)
+   db:exec(string.format("DELETE FROM campaign_mobs WHERE campaign_id = %d", active_campaign_id))
+
+   for _, mob in ipairs(cp_mob_buffer) do
+      local query = string.format(
+         "INSERT INTO campaign_mobs (campaign_id, mob_name, area) VALUES (%d, %s, %s)",
+         active_campaign_id, fixsql(mob.name), fixsql(mob.area))
+      db:exec(query)
+      dbcheck(db:errcode(), db:errmsg(), query)
+   end
+
+   -- Update mob_count on campaign
+   db:exec(string.format(
+      "UPDATE campaigns SET mob_count = (SELECT COUNT(*) FROM campaign_mobs WHERE campaign_id = %d) WHERE id = %d",
+      active_campaign_id, active_campaign_id))
+end
+
+-- =============================================================================
+-- Quest: GMCP comm.quest handler
+-- =============================================================================
+local function handle_quest(data)
+   if not data or not data.action then return end
+   if not db then return end
+   if not enabled then return end
+
+   local action = data.action
+
+   if action == "start" then
+      -- New quest assigned
+      close_open_quest()
+      local query = string.format(
+         "INSERT INTO quests (timestamp, level, tier, remort, mob_name, area, room, timer) " ..
+         "VALUES (%d, %d, %s, %s, %s, %s, %s, %s)",
+         os.time(),
+         cached_level or 0,
+         cached_tier and tostring(cached_tier) or "NULL",
+         cached_remorts and tostring(cached_remorts) or "NULL",
+         fixsql(data.targ),
+         fixsql(data.area),
+         fixsql(data.room),
+         data.timer and tostring(data.timer) or "NULL")
+      db:exec(query)
+      if not dbcheck(db:errcode(), db:errmsg(), query) then
+         active_quest_id = db:last_insert_rowid()
+      end
+
+   elseif action == "comp" then
+      -- Quest completed
+      if active_quest_id then
+         local now = os.time()
+         local query = string.format(
+            "UPDATE quests SET result = 'completed', duration = %d - timestamp, " ..
+            "qp = %s, gold = %s, tp = %s, trains = %s, pracs = %s " ..
+            "WHERE id = %d AND result IS NULL",
+            now,
+            tonumber(data.totqp) and tostring(data.totqp) or "NULL",
+            tonumber(data.gold) and tostring(data.gold) or "NULL",
+            tonumber(data.tp) and tostring(data.tp) or "NULL",
+            tonumber(data.trains) and tostring(data.trains) or "NULL",
+            tonumber(data.pracs) and tostring(data.pracs) or "NULL",
+            active_quest_id)
+         db:exec(query)
+         dbcheck(db:errcode(), db:errmsg(), query)
+         active_quest_id = nil
+      end
+
+   elseif action == "fail" then
+      if active_quest_id then
+         local now = os.time()
+         db:exec(string.format(
+            "UPDATE quests SET result = 'failed', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+            now, active_quest_id))
+         active_quest_id = nil
+      end
+
+   elseif action == "timeout" then
+      if active_quest_id then
+         local now = os.time()
+         db:exec(string.format(
+            "UPDATE quests SET result = 'timeout', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+            now, active_quest_id))
+         active_quest_id = nil
+      end
+
+   elseif action == "status" then
+      -- Login/reconnect status check
+      if data.status == "ready" then
+         -- No active quest — close any open record
+         close_open_quest()
+      elseif data.targ and data.targ ~= "missing" and not active_quest_id then
+         -- Active quest found but we have no record — create one
+         local query = string.format(
+            "INSERT INTO quests (timestamp, level, tier, remort, mob_name, area, room, timer) " ..
+            "VALUES (%d, %d, %s, %s, %s, %s, %s, %s)",
+            os.time(),
+            cached_level or 0,
+            cached_tier and tostring(cached_tier) or "NULL",
+            cached_remorts and tostring(cached_remorts) or "NULL",
+            fixsql(data.targ),
+            fixsql(data.area),
+            fixsql(data.room),
+            data.timer and tostring(data.timer) or "NULL")
+         db:exec(query)
+         if not dbcheck(db:errcode(), db:errmsg(), query) then
+            active_quest_id = db:last_insert_rowid()
+         end
+      end
+   end
+end
+
+-- =============================================================================
+-- Campaign: text trigger handlers
+-- =============================================================================
+function ldb_on_cp_start(name, line, wildcards)
+   if not db then return end
+   if not enabled then return end
+
+   close_open_campaign()
+
+   local query = string.format(
+      "INSERT INTO campaigns (timestamp, level, tier, remort) VALUES (%d, %d, %s, %s)",
+      os.time(),
+      cached_level or 0,
+      cached_tier and tostring(cached_tier) or "NULL",
+      cached_remorts and tostring(cached_remorts) or "NULL")
+   db:exec(query)
+   if not dbcheck(db:errcode(), db:errmsg(), query) then
+      active_campaign_id = db:last_insert_rowid()
+   end
+
+   send_silent_cp_check()
+end
+
+function ldb_on_cp_mob_killed(name, line, wildcards)
+   if not db then return end
+   if not enabled then return end
+   if not active_campaign_id then return end
+
+   send_silent_cp_check()
+end
+
+function ldb_on_cp_complete(name, line, wildcards)
+   if not db then return end
+   if not active_campaign_id then return end
+
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE campaigns SET result = 'completed', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_campaign_id))
+   dbcheck(db:errcode(), db:errmsg(), "cp_complete")
+
+   -- Enable reward parsing
+   cp_reward_parsing = true
+   EnableTrigger("trg_ldb_cp_reward", true)
+   EnableTrigger("trg_ldb_cp_reward_end", true)
+end
+
+function ldb_on_cp_quit(name, line, wildcards)
+   if not db then return end
+   if not active_campaign_id then return end
+
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE campaigns SET result = 'quit', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_campaign_id))
+   active_campaign_id = nil
+end
+
+-- =============================================================================
+-- Campaign: silent cp check parsing handlers
+-- =============================================================================
+function ldb_on_cp_none(name, line, wildcards)
+   -- "You are not currently on a campaign."
+   disable_cp_parsing()
+   close_open_campaign()
+end
+
+function ldb_on_cp_mob_line(name, line, wildcards)
+   -- "You still have to kill * mob_name (area)"
+   EnableTrigger("trg_ldb_cp_mob_end", true)  -- enable end detection after first mob line
+   local mob_name = wildcards[1]
+   local area = wildcards[2]
+   if mob_name then
+      mob_name = string.match(mob_name, "^%s*(.-)%s*$")  -- trim
+   end
+   if area then
+      area = string.match(area, "^%s*(.-)%s*$")
+   end
+   table.insert(cp_mob_buffer, {name = mob_name, area = area})
+end
+
+function ldb_on_cp_mob_end(name, line, wildcards)
+   -- First non-mob line after mob list
+   disable_cp_parsing()
+
+   -- If we got mob lines but have no active campaign (reconnect scenario), create one
+   if not active_campaign_id and #cp_mob_buffer > 0 and db and enabled then
+      local query = string.format(
+         "INSERT INTO campaigns (timestamp, level, tier, remort) VALUES (%d, %d, %s, %s)",
+         os.time(),
+         cached_level or 0,
+         cached_tier and tostring(cached_tier) or "NULL",
+         cached_remorts and tostring(cached_remorts) or "NULL")
+      db:exec(query)
+      if not dbcheck(db:errcode(), db:errmsg(), query) then
+         active_campaign_id = db:last_insert_rowid()
+      end
+   end
+
+   flush_cp_mob_buffer()
+end
+
+function ldb_on_cp_gag(name, line, wildcards)
+   -- No-op handler for gagged lines (time remaining, notes, postnotes)
+end
+
+-- =============================================================================
+-- Campaign: reward parsing handlers
+-- =============================================================================
+function ldb_on_cp_reward(name, line, wildcards)
+   if not active_campaign_id or not db then return end
+
+   local amount_str = wildcards[1]
+   local rtype = wildcards[2]
+   if not amount_str or not rtype then return end
+
+   local amount = tonumber((string.gsub(amount_str, ",", "")))
+   if not amount then return end
+
+   local field = nil
+   if string.find(rtype, "quest point") then field = "qp"
+   elseif string.find(rtype, "gold coin") then field = "gold"
+   elseif string.find(rtype, "trivia point") then field = "tp"
+   elseif string.find(rtype, "training session") then field = "trains"
+   elseif string.find(rtype, "practice") then field = "pracs"
+   end
+
+   if field then
+      db:exec(string.format(
+         "UPDATE campaigns SET %s = COALESCE(%s, 0) + %d WHERE id = %d",
+         field, field, amount, active_campaign_id))
+      dbcheck(db:errcode(), db:errmsg(), "cp_reward " .. field)
+   end
+end
+
+function ldb_on_cp_reward_end(name, line, wildcards)
+   -- Closing "---" separator
+   cp_reward_parsing = false
+   EnableTrigger("trg_ldb_cp_reward", false)
+   EnableTrigger("trg_ldb_cp_reward_end", false)
+   active_campaign_id = nil
+end
+
+-- =============================================================================
+-- Campaign: delayed silent cp check on plugin load
+-- =============================================================================
+local function delayed_cp_check()
+   if not db then return end
+   if not enabled then return end
+   send_silent_cp_check()
 end
 
 -- =============================================================================
@@ -666,6 +1218,17 @@ function ldb_status(name, line, wildcards)
       end
       ColourNote("cyan", "", "  Kills recorded: " .. format_number(kill_count))
       ColourNote("cyan", "", "  Deaths recorded: " .. format_number(death_count))
+
+      local quest_count = 0
+      local campaign_count = 0
+      for row in db:nrows("SELECT COUNT(*) as cnt FROM quests") do
+         quest_count = row.cnt
+      end
+      for row in db:nrows("SELECT COUNT(*) as cnt FROM campaigns") do
+         campaign_count = row.cnt
+      end
+      ColourNote("cyan", "", "  Quests recorded: " .. format_number(quest_count))
+      ColourNote("cyan", "", "  Campaigns recorded: " .. format_number(campaign_count))
    end
 
    if cached_level then
@@ -710,6 +1273,8 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb tier [T]             - Compare remorts within a tier")
    ColourNote("cyan", "", "                            Default: current tier")
    ColourNote("cyan", "", "                            ldb tier 1 = T1")
+   ColourNote("cyan", "", "  ldb quest               - Quest summary and recent quests")
+   ColourNote("cyan", "", "  ldb cp                  - Campaign summary and recent campaigns")
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
    ColourNote("cyan", "", "")
@@ -1324,6 +1889,156 @@ function ldb_tier(name, line, wildcards)
 end
 
 -- =============================================================================
+-- Command: ldb quest / ldb quests
+-- =============================================================================
+function ldb_quests(name, line, wildcards)
+   if not require_db() then return end
+
+   -- Total stats
+   local total = 0
+   local completed = 0
+   local failed = 0
+   local timeout = 0
+   local unknown = 0
+   local total_qp = 0
+   local total_gold = 0
+   local total_duration = 0
+
+   for row in db:nrows(
+      "SELECT result, COUNT(*) as cnt, COALESCE(SUM(qp), 0) as qp, " ..
+      "COALESCE(SUM(gold), 0) as gold, COALESCE(SUM(duration), 0) as dur " ..
+      "FROM quests GROUP BY result") do
+      total = total + row.cnt
+      total_qp = total_qp + row.qp
+      total_gold = total_gold + row.gold
+      total_duration = total_duration + row.dur
+      if row.result == "completed" then completed = row.cnt
+      elseif row.result == "failed" then failed = row.cnt
+      elseif row.result == "timeout" then timeout = row.cnt
+      elseif row.result == "unknown" then unknown = row.cnt
+      end
+   end
+
+   -- Check for active quest
+   local active_str = ""
+   if active_quest_id then
+      for row in db:nrows(string.format(
+         "SELECT mob_name, area FROM quests WHERE id = %d", active_quest_id)) do
+         active_str = string.format(" | Active: %s (%s)", row.mob_name or "?", row.area or "?")
+      end
+   end
+
+   ColourNote("cyan", "", PREFIX .. "Quest summary:")
+   ColourNote("white", "", string.format("  Total: %s | Completed: %s | Failed: %s | Timeout: %s%s%s",
+      format_number(total), format_number(completed), format_number(failed), format_number(timeout),
+      unknown > 0 and (" | Unknown: " .. format_number(unknown)) or "",
+      active_str))
+
+   if completed > 0 then
+      local avg_qp = math.floor(total_qp / completed)
+      local avg_dur = math.floor(total_duration / completed)
+      ColourNote("white", "", string.format("  Total QP: %s | Avg QP: %s | Avg time: %ds",
+         format_number(total_qp), format_number(avg_qp), avg_dur))
+   end
+
+   -- Recent quests
+   ColourNote("cyan", "", "  Recent quests:")
+   local count = 0
+   for row in db:nrows(
+      "SELECT timestamp, level, mob_name, area, result, qp, duration, tier, remort " ..
+      "FROM quests ORDER BY timestamp DESC LIMIT 10") do
+      count = count + 1
+      local time_str = os.date("%Y-%m-%d %H:%M", row.timestamp)
+      local result_str = row.result or "active"
+      local qp_str = row.qp and (" " .. format_number(row.qp) .. "qp") or ""
+      local dur_str = row.duration and (" " .. row.duration .. "s") or ""
+      ColourNote("white", "", string.format("    %s Lvl %-3d %-7s%s%s %s (%s)",
+         time_str, row.level, result_str, qp_str, dur_str,
+         row.mob_name or "?", row.area or "?"))
+   end
+   if count == 0 then
+      ColourNote("yellow", "", "    No quests recorded.")
+   end
+end
+
+-- =============================================================================
+-- Command: ldb cp / ldb cps / ldb campaign / ldb campaigns
+-- =============================================================================
+function ldb_campaigns(name, line, wildcards)
+   if not require_db() then return end
+
+   -- Total stats
+   local total = 0
+   local completed = 0
+   local quit = 0
+   local unknown = 0
+   local total_qp = 0
+   local total_gold = 0
+   local total_duration = 0
+
+   for row in db:nrows(
+      "SELECT result, COUNT(*) as cnt, COALESCE(SUM(qp), 0) as qp, " ..
+      "COALESCE(SUM(gold), 0) as gold, COALESCE(SUM(duration), 0) as dur " ..
+      "FROM campaigns GROUP BY result") do
+      total = total + row.cnt
+      total_qp = total_qp + row.qp
+      total_gold = total_gold + row.gold
+      total_duration = total_duration + row.dur
+      if row.result == "completed" then completed = row.cnt
+      elseif row.result == "quit" then quit = row.cnt
+      elseif row.result == "unknown" then unknown = row.cnt
+      end
+   end
+
+   -- Check for active campaign
+   local active_str = ""
+   if active_campaign_id then
+      for row in db:nrows(string.format(
+         "SELECT mob_count FROM campaigns WHERE id = %d", active_campaign_id)) do
+         local mc = row.mob_count and (row.mob_count .. " mobs") or "in progress"
+         active_str = " | Active: " .. mc
+      end
+   end
+
+   ColourNote("cyan", "", PREFIX .. "Campaign summary:")
+   ColourNote("white", "", string.format("  Total: %s | Completed: %s | Quit: %s%s%s",
+      format_number(total), format_number(completed), format_number(quit),
+      unknown > 0 and (" | Unknown: " .. format_number(unknown)) or "",
+      active_str))
+
+   if completed > 0 then
+      local avg_qp = math.floor(total_qp / completed)
+      local avg_dur = math.floor(total_duration / completed)
+      local avg_min = math.floor(avg_dur / 60)
+      ColourNote("white", "", string.format("  Total QP: %s | Avg QP: %s | Avg time: %dm",
+         format_number(total_qp), format_number(avg_qp), avg_min))
+   end
+
+   -- Recent campaigns
+   ColourNote("cyan", "", "  Recent campaigns:")
+   local count = 0
+   for row in db:nrows(
+      "SELECT timestamp, level, result, mob_count, qp, duration, tier, remort " ..
+      "FROM campaigns ORDER BY timestamp DESC LIMIT 10") do
+      count = count + 1
+      local time_str = os.date("%Y-%m-%d %H:%M", row.timestamp)
+      local result_str = row.result or "active"
+      local qp_str = row.qp and (" " .. format_number(row.qp) .. "qp") or ""
+      local dur_str = ""
+      if row.duration then
+         local mins = math.floor(row.duration / 60)
+         dur_str = " " .. mins .. "m"
+      end
+      local mob_str = row.mob_count and (row.mob_count .. " mobs") or "?"
+      ColourNote("white", "", string.format("    %s Lvl %-3d %-9s%s%s (%s)",
+         time_str, row.level, result_str, qp_str, dur_str, mob_str))
+   end
+   if count == 0 then
+      ColourNote("yellow", "", "    No campaigns recorded.")
+   end
+end
+
+-- =============================================================================
 -- Command: ldb zone [name]
 -- =============================================================================
 function ldb_zone(name, line, wildcards)
@@ -1580,6 +2295,12 @@ function ldb_db_info(name, line, wildcards)
    for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths") do
       ColourNote("white", "", "  Deaths: " .. format_number(row.cnt))
    end
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM quests") do
+      ColourNote("white", "", "  Quests: " .. format_number(row.cnt))
+   end
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM campaigns") do
+      ColourNote("white", "", "  Campaigns: " .. format_number(row.cnt))
+   end
 end
 
 -- =============================================================================
@@ -1614,7 +2335,25 @@ function OnPluginInstall()
       cached_room_name = room.name
    end
 
+   -- Restore active quest/campaign IDs from saved state
+   local saved_quest = GetVariable("active_quest_id")
+   if saved_quest and saved_quest ~= "" then
+      active_quest_id = tonumber(saved_quest)
+   end
+   local saved_campaign = GetVariable("active_campaign_id")
+   if saved_campaign and saved_campaign ~= "" then
+      active_campaign_id = tonumber(saved_campaign)
+   end
+
+   -- Check quest status via GMCP (handler already sent request quest on connect)
+   local quest_data = gmcp("comm.quest")
+   if quest_data then
+      handle_quest(quest_data)
+   end
+
+   -- Schedule delayed silent cp check to detect in-progress campaigns
    if enabled then
+      DoAfterSpecial(2, "delayed_cp_check()", 12)  -- 12 = sendto.script
       ColourNote("cyan", "", PREFIX .. "Loaded (enabled).")
    else
       ColourNote("cyan", "", PREFIX .. "Loaded (disabled). Use 'ldb on' to start collecting data.")
@@ -1623,6 +2362,8 @@ end
 
 function OnPluginSaveState()
    SetVariable("enabled", tostring(enabled))
+   SetVariable("active_quest_id", active_quest_id and tostring(active_quest_id) or "")
+   SetVariable("active_campaign_id", active_campaign_id and tostring(active_campaign_id) or "")
 end
 
 function OnPluginClose()
