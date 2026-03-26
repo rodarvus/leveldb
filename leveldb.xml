@@ -1039,9 +1039,14 @@ local function query_bracket_stats(tier, remort)
    local grand_deaths = 0
 
    for _, br in ipairs(BRACKETS) do
+      local is_pups = (br.min == 201)
       local where_k = string.format(
          "tier = %d AND remort = %d AND level >= %d AND level <= %d",
          tier, remort, br.min, br.max)
+      -- For Pups bracket, exclude low-level mob kills (goal completions etc.)
+      if is_pups then
+         where_k = where_k .. " AND (mob_level IS NULL OR mob_level > 200)"
+      end
       local where_d = string.format(
          "tier = %d AND remort = %d AND level >= %d AND level <= %d",
          tier, remort, br.min, br.max)
@@ -1049,7 +1054,7 @@ local function query_bracket_stats(tier, remort)
       local row_data = {
          label = br.label,
          kills = 0, avg_xp = 0, avg_dmg = 0, avg_gap = nil,
-         avg_rnd = 0, zones = 0, deaths = 0,
+         avg_rnd = 0, zones = 0, deaths = 0, pup_count = 0,
       }
 
       for row in db:nrows(
@@ -1068,6 +1073,16 @@ local function query_bracket_stats(tier, remort)
          row_data.zones = row.zones
       end
 
+      -- Pup count (only meaningful for Pups bracket)
+      if is_pups then
+         for row in db:nrows(string.format(
+            "SELECT COUNT(DISTINCT pup) as cnt FROM kills WHERE " ..
+            "tier = %d AND remort = %d AND level >= 201 AND pup IS NOT NULL",
+            tier, remort)) do
+            row_data.pup_count = row.cnt
+         end
+      end
+
       for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. where_d) do
          row_data.deaths = row.cnt
       end
@@ -1084,13 +1099,12 @@ end
 -- Helper: render bracket table (used by both ldb remort and ldb tier)
 -- =============================================================================
 local function render_bracket_table(rows, show_header)
+   local fmt =  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s  %4s"
    if show_header then
-      ColourNote("cyan", "", string.format(
-         "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
-         "Bracket", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
-      ColourNote("cyan", "", string.format(
-         "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
-         "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
+      ColourNote("cyan", "", string.format(fmt,
+         "Bracket", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths", "Pups"))
+      ColourNote("cyan", "", string.format(fmt,
+         "-------", "-----", "-----", "------", "------", "------", "-----", "------", "----"))
    end
 
    local grand_kills = 0
@@ -1099,18 +1113,18 @@ local function render_bracket_table(rows, show_header)
    local grand_gap_sum = 0
    local grand_gap_count = 0
    local grand_rnd_sum = 0
-   local grand_zones_set = {}  -- can't easily union, use total unique
    local grand_deaths = 0
 
    for _, r in ipairs(rows) do
       grand_kills = grand_kills + r.kills
       grand_deaths = grand_deaths + r.deaths
 
+      local pup_str = (r.pup_count and r.pup_count > 0) and tostring(r.pup_count) or ""
+
       if r.kills == 0 then
-         ColourNote("white", "", string.format(
-            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+         ColourNote("white", "", string.format(fmt,
             r.label, "-", "-", "-", "-", "-", "-",
-            r.deaths > 0 and tostring(r.deaths) or "-"))
+            r.deaths > 0 and tostring(r.deaths) or "-", pup_str))
       else
          grand_xp_sum = grand_xp_sum + (r.avg_xp * r.kills)
          grand_dmg_sum = grand_dmg_sum + (r.avg_dmg * r.kills)
@@ -1125,8 +1139,7 @@ local function render_bracket_table(rows, show_header)
             gap_str = string.format("%+.1f", r.avg_gap)
          end
 
-         ColourNote("white", "", string.format(
-            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5d  %6s",
+         ColourNote("white", "", string.format(fmt,
             r.label,
             format_abbreviated(r.kills),
             format_abbreviated(math.floor(r.avg_xp)),
@@ -1134,22 +1147,21 @@ local function render_bracket_table(rows, show_header)
             gap_str,
             string.format("%.1f", r.avg_rnd),
             r.zones,
-            r.deaths > 0 and tostring(r.deaths) or "-"))
+            r.deaths > 0 and tostring(r.deaths) or "-",
+            pup_str))
       end
    end
 
    -- Total row
-   ColourNote("cyan", "", string.format(
-      "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
-      "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
+   ColourNote("cyan", "", string.format(fmt,
+      "-------", "-----", "-----", "------", "------", "------", "-----", "------", "----"))
 
    local tot_avg_xp = grand_kills > 0 and format_abbreviated(math.floor(grand_xp_sum / grand_kills)) or "-"
    local tot_avg_dmg = grand_kills > 0 and format_abbreviated(math.floor(grand_dmg_sum / grand_kills)) or "-"
    local tot_avg_gap = grand_gap_count > 0 and string.format("%+.1f", grand_gap_sum / grand_gap_count) or "-"
    local tot_avg_rnd = grand_kills > 0 and string.format("%.1f", grand_rnd_sum / grand_kills) or "-"
 
-   ColourNote("white", "", string.format(
-      "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+   ColourNote("white", "", string.format(fmt,
       "Total",
       format_abbreviated(grand_kills),
       tot_avg_xp,
@@ -1157,7 +1169,8 @@ local function render_bracket_table(rows, show_header)
       tot_avg_gap,
       tot_avg_rnd,
       "",
-      grand_deaths > 0 and tostring(grand_deaths) or "-"))
+      grand_deaths > 0 and tostring(grand_deaths) or "-",
+      ""))
 end
 
 -- =============================================================================
@@ -1249,12 +1262,17 @@ function ldb_tier(name, line, wildcards)
       if bi > 1 then Note("") end
 
       -- Check if any remort has data in this bracket
+      local is_pups = (br.min == 201)
       local bracket_has_data = false
       local bracket_rows = {}
       for _, rm in ipairs(remorts) do
          local where_k = string.format(
             "tier = %d AND remort = %d AND level >= %d AND level <= %d",
             tier, rm, br.min, br.max)
+         -- For Pups bracket, exclude low-level mob kills (goal completions etc.)
+         if is_pups then
+            where_k = where_k .. " AND (mob_level IS NULL OR mob_level > 200)"
+         end
          local where_d = string.format(
             "tier = %d AND remort = %d AND level >= %d AND level <= %d",
             tier, rm, br.min, br.max)
@@ -1262,7 +1280,7 @@ function ldb_tier(name, line, wildcards)
          local row_data = {
             label = "R" .. rm,
             kills = 0, avg_xp = 0, avg_dmg = 0, avg_gap = nil,
-            avg_rnd = 0, zones = 0, deaths = 0,
+            avg_rnd = 0, zones = 0, deaths = 0, pup_count = 0,
          }
 
          for row in db:nrows(
@@ -1281,6 +1299,16 @@ function ldb_tier(name, line, wildcards)
             row_data.zones = row.zones
          end
 
+         -- Pup count (only meaningful for Pups bracket)
+         if is_pups then
+            for row in db:nrows(string.format(
+               "SELECT COUNT(DISTINCT pup) as cnt FROM kills WHERE " ..
+               "tier = %d AND remort = %d AND level >= 201 AND pup IS NOT NULL",
+               tier, rm)) do
+               row_data.pup_count = row.cnt
+            end
+         end
+
          for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. where_d) do
             row_data.deaths = row.cnt
          end
@@ -1291,32 +1319,31 @@ function ldb_tier(name, line, wildcards)
          table.insert(bracket_rows, row_data)
       end
 
+      local tier_fmt = "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s  %4s"
       ColourNote("cyan", "", "  -- " .. br.label .. " --")
       if not bracket_has_data then
          ColourNote("yellow", "", "    No data.")
       else
          -- Render header using "Remort" instead of "Bracket" for this context
-         ColourNote("cyan", "", string.format(
-            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
-            "Remort", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
-         ColourNote("cyan", "", string.format(
-            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
-            "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
+         ColourNote("cyan", "", string.format(tier_fmt,
+            "Remort", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths", "Pups"))
+         ColourNote("cyan", "", string.format(tier_fmt,
+            "-------", "-----", "-----", "------", "------", "------", "-----", "------", "----"))
 
          for _, r in ipairs(bracket_rows) do
+            local pup_str = (r.pup_count and r.pup_count > 0) and tostring(r.pup_count) or ""
+
             if r.kills == 0 then
-               ColourNote("white", "", string.format(
-                  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+               ColourNote("white", "", string.format(tier_fmt,
                   r.label, "-", "-", "-", "-", "-", "-",
-                  r.deaths > 0 and tostring(r.deaths) or "-"))
+                  r.deaths > 0 and tostring(r.deaths) or "-", pup_str))
             else
                local gap_str = "-"
                if r.avg_gap then
                   gap_str = string.format("%+.1f", r.avg_gap)
                end
 
-               ColourNote("white", "", string.format(
-                  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5d  %6s",
+               ColourNote("white", "", string.format(tier_fmt,
                   r.label,
                   format_abbreviated(r.kills),
                   format_abbreviated(math.floor(r.avg_xp)),
@@ -1324,7 +1351,8 @@ function ldb_tier(name, line, wildcards)
                   gap_str,
                   string.format("%.1f", r.avg_rnd),
                   r.zones,
-                  r.deaths > 0 and tostring(r.deaths) or "-"))
+                  r.deaths > 0 and tostring(r.deaths) or "-",
+                  pup_str))
             end
          end
       end
