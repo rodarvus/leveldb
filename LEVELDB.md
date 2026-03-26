@@ -5,22 +5,24 @@ Last Updated: 2026-03-26
 Plugin File: leveldb.xml
 Plugin ID: b34c04e52c6c7bced4508230
 Author: Rodarvus
-Current Version: 5.0
+Current Version: 6.0
 
 ================================================================================
 OVERVIEW
 ================================================================================
-LevelDB is a standalone MUSHclient plugin for Aardwolf MUD that records per-kill
-combat data in a persistent SQLite database. It tracks mob kills, XP gains,
-mob level estimates, damage dealt, rounds fought, and deaths across the character's
-entire leveling journey.
+LevelDB is a standalone MUSHclient plugin for Aardwolf MUD that records combat,
+quest, and campaign data in a persistent SQLite database. It tracks mob kills,
+XP gains, mob level estimates, damage dealt, rounds fought, deaths, quest
+completions, and campaign results across the character's entire leveling journey.
 
 Key Features:
 - Per-kill records: mob name, zone, room, level, XP, mob level, damage, rounds
 - Per-death records: mob, zone, room, level, tier, remort
+- Quest tracking: target, area, room, timer, result, rewards (QP/gold/TP/trains/pracs)
+- Campaign tracking: mob list, result, rewards, expected rewards from cp info
 - Tier and remort tracked as columns in every record
-- Tier/remort filtering: level/this/last commands default to current tier+remort,
-  with optional filters (all, T1 R5, R4, T1)
+- Tier/remort filtering: level/this/last/quest/cp commands default to current
+  tier+remort, with optional filters (all, T1 R5, R4, T1)
 - Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200, Pups) with
   avg XP, damage, level gap, rounds, zones, deaths, and pup count
 - Tier summary: compare remorts within a tier, organized by bracket sections
@@ -36,12 +38,12 @@ COMMANDS
 ================================================================================
 
 BASIC:
-  ldb                     - Show status (enabled, DB path, kill/death counts)
+  ldb                     - Show status (enabled, DB path, kill/death/quest/campaign counts)
   ldb help                - Show all commands
   ldb on                  - Enable data collection
   ldb off                 - Disable data collection
 
-QUERIES:
+QUERIES (COMBAT):
   ldb level [N] [filter]  - Kill breakdown for level N (default: current level)
                             Tabular per-kill listing with totals and averages
                             At level 200+: N is a powerup number (default: current pup)
@@ -54,6 +56,7 @@ QUERIES:
     T1 R5                 - Specific tier and remort
     T1                    - All remorts within a tier (separate sections)
     R4                    - Specific remort, current tier
+
   ldb remort [R] [T<n>]   - Bracket summary for one remort (1-50, 51-100,
                             101-150, 151-200, Pups). Shows kills, avg XP,
                             avg damage, avg level gap, avg rounds, zones,
@@ -77,6 +80,26 @@ QUERIES:
                             Requires 3+ kills to be ranked (HAVING cnt >= 3)
   ldb deaths [N]          - Last N deaths (default 10) with timestamp, level,
                             mob, zone
+
+QUERIES (QUESTS/CAMPAIGNS):
+  ldb quest [filter]      - Quest history table (default: current tier & remort)
+                            Shows: ID, Lvl, QP, Gold, TP, Time, Mob (Area)
+                            Colored suffixes: (active) green, (failed)/(timeout) red
+                            Summary with completion rate, avg QP, avg time
+                            Filter options: same as level/this/last commands
+                            Capped at 50 rows; total count shown if more exist
+
+  ldb cp [filter]         - Campaign history table (default: current tier & remort)
+                            Shows: ID, Lvl, Mobs, QP, Gold, TP, Time
+                            Colored suffixes: (active) green, (quit) red
+                            Summary with completion rate, avg QP, avg time
+                            Filter options: same as level/this/last commands
+                            Also: ldb cps, ldb campaign, ldb campaigns
+
+  ldb cp show <id>        - Detailed view of a specific campaign by database ID
+                            Shows: timestamp, level (T/R), result (colored),
+                            mob count, rewards (actual or expected), full mob list
+                            Also: ldb cps show, ldb campaign show, ldb campaigns show
 
 DATABASE:
   ldb db                  - Database file info: path, size, record counts
@@ -118,10 +141,54 @@ Schema:
     tier         INTEGER               -- char.base.tier (nullable)
     remort       INTEGER               -- char.base.remorts (nullable)
 
+  quests:
+    id           INTEGER PRIMARY KEY AUTOINCREMENT
+    timestamp    INTEGER NOT NULL      -- os.time() at quest start
+    level        INTEGER NOT NULL       -- player level when quest started
+    tier         INTEGER               -- char.base.tier (nullable)
+    remort       INTEGER               -- char.base.remorts (nullable)
+    mob_name     TEXT                   -- target mob name from GMCP (nullable)
+    area         TEXT                   -- target area from GMCP (nullable)
+    room         TEXT                   -- target room from GMCP (nullable)
+    timer        INTEGER               -- time limit in minutes from GMCP (nullable)
+    result       TEXT                   -- completed/failed/timeout/unknown (nullable while active)
+    duration     INTEGER               -- seconds from start to completion (nullable while active)
+    qp           INTEGER               -- quest points earned (nullable)
+    gold         INTEGER               -- gold earned (nullable)
+    tp           INTEGER               -- trivia points earned (nullable)
+    trains       INTEGER               -- training sessions earned (nullable)
+    pracs        INTEGER               -- practices earned (nullable)
+
+  campaigns:
+    id           INTEGER PRIMARY KEY AUTOINCREMENT
+    timestamp    INTEGER NOT NULL      -- os.time() at campaign start
+    level        INTEGER NOT NULL       -- player level when campaign started
+    tier         INTEGER               -- char.base.tier (nullable)
+    remort       INTEGER               -- char.base.remorts (nullable)
+    result       TEXT                   -- completed/quit/unknown (nullable while active)
+    duration     INTEGER               -- seconds from start to completion (nullable while active)
+    mob_count    INTEGER               -- number of mobs assigned (nullable)
+    qp           INTEGER               -- quest points earned (nullable)
+    gold         INTEGER               -- gold earned (nullable)
+    tp           INTEGER               -- trivia points earned (nullable)
+    trains       INTEGER               -- training sessions earned (nullable)
+    pracs        INTEGER               -- practices earned (nullable)
+    expected_qp  INTEGER               -- QP from cp info (for reconnect matching)
+    expected_gold INTEGER              -- gold from cp info (for display)
+
+  campaign_mobs:
+    id           INTEGER PRIMARY KEY AUTOINCREMENT
+    campaign_id  INTEGER NOT NULL REFERENCES campaigns(id)
+    mob_name     TEXT NOT NULL          -- mob name from cp info output
+    area         TEXT                   -- area name from cp info output (nullable)
+
 Indexes:
   idx_kills_level, idx_kills_zone, idx_kills_mob, idx_kills_timestamp
   idx_kills_tier, idx_kills_remort, idx_kills_pup, idx_kills_mob_level
   idx_deaths_level, idx_deaths_zone, idx_deaths_tier, idx_deaths_remort
+  idx_quests_level, idx_quests_tier, idx_quests_remort
+  idx_campaigns_level, idx_campaigns_tier, idx_campaigns_remort
+  idx_campaign_mobs_cid
 
 Design Decisions:
 - xp_gained = 0 is valid (mobs that yield no XP, fled/interrupted combats).
@@ -138,6 +205,12 @@ Design Decisions:
 - tier and remort are nullable because char.base may not have arrived yet.
 - pup is nullable: NULL for levels 1-199, populated from char.base.pups at 200+.
   Old records from v2.0 databases have pup=NULL (added via ALTER TABLE migration).
+- Quest result is NULL while active, set on completion/failure/timeout. "unknown"
+  is set when a quest is force-closed (new quest starts while old one has no result,
+  or reconnect finds no active quest).
+- Campaign expected_qp/expected_gold are captured from cp info output for two
+  purposes: reconnect matching (compare level + expected_qp to detect same campaign)
+  and display in ldb cp show for active campaigns.
 
 ================================================================================
 COMBAT STATE MACHINE
@@ -276,6 +349,102 @@ sacrifice_mob_level BEFORE the char.status broadcast triggers record_kill().
 sacrifice_mob_level is reset in start_fight() and end_combat().
 
 ================================================================================
+QUEST TRACKING
+================================================================================
+
+Quests are tracked via GMCP comm.quest broadcasts. The aard_GMCP_handler plugin
+processes quest-related GMCP messages and broadcasts them to all plugins.
+
+GMCP comm.quest actions handled:
+  - start:   New quest assigned. Closes any open quest (as "unknown"), creates
+             new record with mob_name, area, room, timer from GMCP data.
+  - comp:    Quest completed. Updates result to "completed", records duration,
+             captures rewards (totqp, gold, tp, trains, pracs) from GMCP data.
+  - fail:    Quest failed. Updates result to "failed", records duration.
+  - timeout: Quest timed out. Updates result to "timeout", records duration.
+  - status:  Login/reconnect status. If status="ready" (no active quest), closes
+             any open quest record. If a quest target is present and no active
+             record exists, creates a new record for the in-progress quest.
+
+Quest Lifecycle:
+  1. Quest assigned (GMCP start) -> INSERT with NULL result
+  2. Quest completed/failed/timeout (GMCP comp/fail/timeout) -> UPDATE result + duration
+  3. New quest before old one resolved -> old quest closed as "unknown"
+
+Active Quest State:
+  active_quest_id tracks the DB id of the current open quest. Persisted via
+  save_state across plugin reloads. Set on INSERT, cleared on completion/failure.
+
+================================================================================
+CAMPAIGN TRACKING
+================================================================================
+
+Campaigns are tracked via a combination of text triggers (always-on) and silent
+cp info parsing (on-demand). Unlike quests, campaigns have no GMCP broadcast for
+mob lists, so the plugin sends "cp info" to the MUD to capture this data.
+
+Campaign Lifecycle:
+  1. Campaign requested -> Questmaster says "Good luck in your campaign!"
+     (trg_ldb_cp_start) -> INSERT campaign record, send silent cp info
+  2. cp info response parsed -> mob list captured, expected rewards recorded
+  3. Mobs killed -> trg_ldb_cp_mob_killed fires (handler is a no-op, kept for
+     potential future use)
+  4a. Campaign completed -> "CONGRATULATIONS!" trigger fires -> UPDATE result to
+      "completed", enable reward parsing triggers
+  4b. Campaign quit -> "Campaign cleared." trigger fires -> UPDATE result to "quit"
+  5. Reward lines parsed -> UPDATE campaign with actual QP/gold/TP/trains/pracs
+  6. Closing separator -> disable reward triggers, clear active_campaign_id
+
+Silent cp info Mechanism:
+  The plugin sends SendNoEcho("cp info") to retrieve campaign details without
+  echoing the command. Seven triggers (disabled by default) are temporarily enabled
+  to parse the response:
+
+  Trigger Name             Match Pattern                              Seq  Purpose
+  trg_ldb_cpinfo_none      ^You are not currently on a campaign\.$   89   No campaign
+  trg_ldb_cpinfo_level     ^Level Taken\.+:\s*\[\s*(\d+)\s*\]       89   Capture level
+  trg_ldb_cpinfo_qp        ^Quest Points\.+:\s*\[\s*(\d+)\s*\]      89   Capture QP
+  trg_ldb_cpinfo_gold      ^Gold Coins\.+:\s*\[\s*([\d,]+)\s*\]     89   Capture gold
+  trg_ldb_cpinfo_mob       ^Find and kill \d+ \* (.+) \((.+)\)$     89   Capture mob
+  trg_ldb_cpinfo_gag       ^(?:-+\[|Complete By|Time Left|...)       90   Gag headers
+  trg_ldb_cpinfo_end       ^-{20,}$                                  91   End of output
+
+  All parsing triggers have omit_from_output="y" to suppress the cp info output.
+  Sequence ordering ensures: data capture (89) < gag (90) < end detection (91).
+  All triggers are disabled after parsing completes (success or "no campaign").
+
+  cp info is sent in two scenarios:
+  1. Campaign start: immediately after the "Good luck" trigger fires
+  2. Plugin load: via DoAfterSpecial(2, "delayed_cp_info()", 12) to detect
+     in-progress campaigns on reconnect/reload
+
+Campaign Reconnect Reconciliation:
+  On plugin load, a delayed cp info check runs after 2 seconds. The response
+  is reconciled against the saved active_campaign_id:
+
+  - No saved campaign + cp info shows campaign -> create new record
+  - Saved campaign + cp info matches (level + expected_qp) -> keep record,
+    refresh mob list
+  - Saved campaign + cp info doesn't match -> close old as "unknown",
+    create new record
+  - cp info says "not on a campaign" -> close any saved record as "unknown"
+
+Campaign Reward Parsing:
+  After "CONGRATULATIONS!" fires, two reward triggers are enabled:
+  - trg_ldb_cp_reward: "  Reward of N,NNN type added." -> UPDATE campaign
+    field (qp/gold/tp/trains/pracs) using COALESCE for additive rewards
+  - trg_ldb_cp_reward_end: closing "---" separator -> disable reward triggers,
+    clear active_campaign_id
+
+Why cp info Instead of cp check:
+  WinkleGold_Mapper_Extender has triggers that parse cp check output. When
+  LevelDB sends a silent "cp check", WinkleGold sees the response and errors
+  because its serialization logic doesn't expect it during that context.
+  "cp info" produces similar output but WinkleGold has no triggers for it,
+  avoiding the conflict entirely. Additionally, cp info provides richer data
+  (level taken, expected QP, expected gold) that cp check does not.
+
+================================================================================
 GMCP BROADCASTS HANDLED
 ================================================================================
 
@@ -292,12 +461,15 @@ char.status:
 room.info:
   - Caches zone, room_num, room_name for kill/death location
 
+comm.quest:
+  - Quest lifecycle tracking (start, comp, fail, timeout, status)
+  - Dispatches to handle_quest() for database operations
+
 Broadcasts NOT listened to (by design):
   - char.vitals: HP/mana/moves not tracked by LevelDB
   - char.stats: Stats not relevant to kill tracking
   - char.worth: Gold no longer tracked (removed in v4.0)
-  - comm.channel: LevelDB has no interaction detection
-  - comm.quest: Quest XP not tracked
+  - comm.channel: LevelDB has no chat interaction detection
 
 ================================================================================
 PLUGIN LIFECYCLE
@@ -309,13 +481,20 @@ OnPluginInstall:
   3. Read current GMCP state (char.base, char.status, room.info) via gmcp()
      to populate cached values. Handles mid-session plugin reload where
      these broadcasts have already been sent and won't repeat.
-  4. Display load message
+  4. Restore active_quest_id and active_campaign_id from saved state
+  5. Check quest status via GMCP comm.quest (reconcile quest state on reload)
+  6. If enabled, schedule delayed_cp_info() via DoAfterSpecial(2s) to detect
+     and reconcile in-progress campaigns on reconnect/reload
+  7. Display load message
 
 OnPluginBroadcast (char.base):
   - Caches perlevel, tier, remort, and pups values from GMCP
 
+OnPluginBroadcast (comm.quest):
+  - Dispatches to handle_quest() for quest lifecycle tracking
+
 OnPluginSaveState:
-  - Persists enabled flag (only persistent setting)
+  - Persists enabled flag, active_quest_id, active_campaign_id
 
 OnPluginClose:
   - Close database handle
@@ -324,7 +503,8 @@ OnPluginDisconnect:
   - End any active combat tracking (prevents stale state on reconnect)
 
 State Persistence:
-  save_state="y" with one variable: enabled (boolean)
+  save_state="y" with three variables: enabled (boolean),
+  active_quest_id (number or ""), active_campaign_id (number or "")
 
 ================================================================================
 DATABASE OPERATIONS
@@ -353,6 +533,8 @@ Schema Initialization:
 Schema Migrations:
   - v2.0 -> v3.0: ALTER TABLE kills ADD COLUMN pup INTEGER
   - v3.0 -> v4.0: ALTER TABLE kills ADD COLUMN mob_level INTEGER
+  - v5.0 -> v6.0: ALTER TABLE campaigns ADD COLUMN expected_qp INTEGER
+                   ALTER TABLE campaigns ADD COLUMN expected_gold INTEGER
   Errors from "duplicate column name" are silently ignored. Old records retain
   NULL for new columns.
 
@@ -379,7 +561,7 @@ Powerup auto-adapt (ldb level, ldb this, ldb last):
 - show_level_stats(level, pup, filter) adds AND pup=N to WHERE clause when pup is provided
 - Header displays "Powerup N kills:" instead of "Level N kills:"
 
-Tier/remort filtering (ldb level, ldb this, ldb last):
+Tier/remort filtering (ldb level, ldb this, ldb last, ldb quest, ldb cp):
 - Default (no filter): queries with AND tier=cached_tier AND remort=cached_remorts
 - "all": queries for DISTINCT (tier, remort) combos at that level (excluding NULLs),
   then renders each combo as a separate section with its own table and totals
@@ -390,6 +572,16 @@ Tier/remort filtering (ldb level, ldb this, ldb last):
 - show_level_stats() orchestrates; show_level_stats_section() renders one section
 - Records with NULL tier or remort are silently excluded from all filtered queries
 
+Quest/campaign display:
+- Tabular output with database ID (#), level, rewards, duration, and target info
+- Database IDs (not sequential) allow cross-tier/remort lookups (ldb cp show <id>)
+- Colored status suffixes via multi-argument ColourNote: green (active), red (failed/
+  timeout/quit)
+- Summary line shows completion breakdown and total count
+- Averages line shows avg QP, avg time, total QP, total gold (completed only)
+- Capped at 50 rows; total count displayed if more exist
+- format_duration(): <120s shows seconds, else shows minutes
+
 ldb top xp:
 - Uses HAVING cnt >= 3 to exclude one-off kills that skew averages
 - Ranks by avg XP per kill (CAST SUM AS REAL / COUNT)
@@ -398,13 +590,19 @@ ldb top xp:
 PLUGIN COEXISTENCE
 ================================================================================
 
-LevelDB is fully passive -- it only observes GMCP broadcasts and text output.
-It never sends commands to the MUD. No conflict with:
+LevelDB is mostly passive -- it primarily observes GMCP broadcasts and text output.
+The one exception is campaign tracking, where it sends "cp info" to the MUD via
+SendNoEcho() (command not echoed to the user). This occurs at most twice per
+campaign: once at campaign start, and once on plugin load if a campaign is active.
 
+Compatibility notes:
 - stats_tracker: Both track XP via TNL delta; independent databases
 - Aardwolf_Damage_Window: Both match damage lines; keep_evaluating="y"
 - aard_soundpack: Both match "You die."; keep_evaluating="y"
-- NPC_Info, WingleGold_Spellup, or any other plugin
+- WinkleGold_Mapper_Extender: Uses cp info (not cp check) to avoid triggering
+  WinkleGold's cp check parsing triggers, which would error on unexpected input.
+  cp info output is not parsed by any known community plugin.
+- NPC_Info, WingleGold_Spellup, or any other plugin: No known conflicts
 
 ================================================================================
 KNOWN LIMITATIONS
@@ -424,6 +622,15 @@ KNOWN LIMITATIONS
    User input to ldb zone/mob is used directly in SQL LIKE patterns without
    escaping % or _ characters. This is acceptable because Aardwolf mob names and
    zone names never contain these characters.
+
+4. Campaign mob list is static:
+   The mob list is captured once via cp info when the campaign starts. It is not
+   updated as mobs are killed. The mob_killed trigger is a no-op placeholder.
+
+5. Campaign reconnect timing:
+   The delayed_cp_info() fires 2 seconds after plugin load. If GMCP data has not
+   arrived by then, the campaign record may use incomplete cached values (level,
+   tier, remort). This window is small in practice.
 
 ================================================================================
 PLUGIN DEPENDENCIES
@@ -447,6 +654,18 @@ Documentation:
 ================================================================================
 VERSION HISTORY
 ================================================================================
+
+v6.0 (2026-03-26):
+  - Quest tracking via GMCP comm.quest broadcasts (start/comp/fail/timeout/status)
+  - Campaign tracking via text triggers + silent cp info parsing
+  - New tables: quests, campaigns, campaign_mobs
+  - New commands: ldb quest [filter], ldb cp [filter], ldb cp show <id>
+  - Campaign mob list captured from cp info output (avoids WinkleGold conflicts)
+  - Campaign reconnect reconciliation (level + expected_qp matching)
+  - Campaign reward parsing (QP, gold, TP, trains, pracs)
+  - Tier/remort filtering for quest and campaign commands
+  - Active quest/campaign IDs persisted across plugin reloads
+  - Status command (ldb) now shows quest and campaign counts
 
 v5.0 (2026-03-26):
   - Tier/remort filtering for level/this/last commands (default: current T+R)
@@ -480,7 +699,7 @@ FUTURE CONSIDERATIONS
 - Session tracking / XP-per-hour calculation
 - Miniwindow / real-time display
 - Item loot tracking
-- Quest/campaign/GQ tracking
+- GQ (Global Quest) tracking
 - Spell-per-kill tracking
 - Data export (CSV/JSON)
 - Level time estimation
