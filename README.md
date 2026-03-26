@@ -2,38 +2,63 @@
 
 A leveling database plugin for [Aardwolf MUD](http://www.aardwolf.com/), built for [MUSHclient](http://www.gammon.com.au/mushclient/).
 
-## What it does
-
-LevelDB silently records every combat encounter into a persistent SQLite database. Each kill captures the mob name, zone, room, player level, XP gained, gold earned, total damage dealt, and rounds fought. Deaths are tracked separately with the killing mob, zone, and level. Tier and remort are stored with every record.
-
-The plugin is fully passive — it observes GMCP broadcasts and combat text without ever sending commands to the MUD. It works alongside manual play, automation plugins like S&D and SpellUp, or any other setup.
+LevelDB records combat encounters, quest completions, and campaign results into a persistent SQLite database. It tracks every kill, death, quest, and campaign across your character's entire leveling journey, with rich query commands to analyze your history.
 
 ## Features
 
-- **Per-kill tracking** — mob name, zone, room, level, XP, gold, damage, rounds
-- **Death tracking** — mob, zone, room, level
-- **Tier/remort columns** — every record includes the current tier and remort
-- **Query commands** — per-level breakdowns, per-zone stats, per-mob stats, top-N rankings, death history
+**Combat tracking**
+- Per-kill records: mob name, zone, room, player level, XP gained, damage dealt, rounds fought, estimated mob level (from sacrifice gold)
+- Per-death records: mob, zone, room, level, tier, remort
+- XP calculation with level-up and powerup detection
+- Tier and remort stored with every record
+
+**Quest tracking**
+- Automatic tracking via GMCP comm.quest broadcasts
+- Records target mob, area, room, timer, result (completed/failed/timeout)
+- Captures rewards: QP, gold, TP, trains, pracs
+- Reconnect-safe: restores active quest state on plugin reload
+
+**Campaign tracking**
+- Campaign lifecycle tracked via text triggers (start, complete, quit)
+- Mob list captured from silent `cp info` parsing (avoids WinkleGold conflicts)
+- Captures rewards: QP, gold, TP, trains, pracs
+- Reconnect reconciliation: detects in-progress campaigns on plugin reload
+- Detailed campaign view with full mob list
+
+**Query and analysis**
+- Per-level kill breakdowns with totals and averages
+- Tier/remort filtering on all commands (default: current T+R; supports `all`, `T1 R5`, `T1`, `R4`)
+- Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200, Pups)
+- Tier summary: compare remorts side-by-side within a tier
+- Powerup support: at level 200+, queries auto-adapt to segment by powerup number
+- Per-zone and per-mob stats with substring search
+- Top-N rankings by kill count, total XP, or average XP
+- Quest and campaign history tables with colored status, summaries, and averages
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `ldb` | Show status |
+| `ldb` | Show status (enabled, DB path, record counts) |
 | `ldb help` | List all commands |
 | `ldb on` / `ldb off` | Enable/disable data collection |
-| `ldb level [N] [filter]` | Per-kill table for a level (default: current) |
-| `ldb this [filter]` | Per-kill table for current level |
-| `ldb last [filter]` | Per-kill table for previous level |
-
-Filter options: default = current tier/remort. `all` = all tiers/remorts (separate sections). `T1 R5` = specific tier and remort. `T1` = all remorts within a tier. `R4` = specific remort, current tier.
+| `ldb level [N] [filter]` | Per-kill table for a level (default: current). At 200+: N is a powerup number |
+| `ldb this [filter]` | Per-kill table for current level/powerup |
+| `ldb last [filter]` | Per-kill table for previous level/powerup |
+| `ldb remort [R] [T<n>]` | Bracket summary for a remort (default: current T+R) |
+| `ldb tier [T]` | Compare remorts within a tier (default: current) |
 | `ldb zone [name]` | Stats for a zone (default: current; substring match) |
 | `ldb mob <name>` | Stats for a mob (substring match) |
-| `ldb top mobs [N]` | Top N mobs by kill count |
-| `ldb top zones [N]` | Top N zones by total XP |
-| `ldb top xp [N]` | Top N mobs by average XP per kill |
-| `ldb deaths [N]` | Last N deaths |
-| `ldb db` | Database file info |
+| `ldb top mobs [N]` | Top N mobs by kill count (default 10) |
+| `ldb top zones [N]` | Top N zones by total XP (default 10) |
+| `ldb top xp [N]` | Top N mobs by average XP per kill (default 10) |
+| `ldb deaths [N]` | Last N deaths (default 10) |
+| `ldb quest [filter]` | Quest history table (default: current T+R) |
+| `ldb cp [filter]` | Campaign history table (default: current T+R) |
+| `ldb cp show <id>` | Detailed view of a campaign by database ID |
+| `ldb db` | Database file info (path, size, record counts) |
+
+**Filter options** (for level/this/last/quest/cp): default = current tier and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T1` = all remorts within a tier. `R4` = specific remort, current tier.
 
 ## Installation
 
@@ -41,15 +66,7 @@ Filter options: default = current tier/remort. `all` = all tiers/remorts (separa
 2. In MUSHclient, load the plugin via **File > Plugins > Add**.
 3. Type `ldb on` to start collecting data.
 
-Requires the **aard_GMCP_handler** plugin (included with the standard Aardwolf MUSHclient package).
-
-## How it works
-
-LevelDB listens to GMCP broadcasts (`char.status`, `char.base`, `char.worth`, `room.info`) to detect combat start/end, track XP and gold deltas, and identify zones and rooms. Text triggers capture damage values from combat output lines, detect player death, and identify bonus gold rewards (campaigns, GQ wins) so they are excluded from per-kill gold.
-
-XP per kill is calculated from the TNL (to-next-level) delta between combat start and end, with level-up detection. Gold is calculated from `char.worth.gold` delta. Rounds are counted by tracking `enemypct` changes.
-
-Data is stored in a single SQLite database (`leveldb.db`) in `worlds/plugins/state/leveldb/`.
+Requires the **aard_GMCP_handler** plugin (included with the standard Aardwolf MUSHclient package). Data is stored in a single SQLite database (`leveldb.db`) in `worlds/plugins/state/leveldb/`.
 
 See [LEVELDB.md](LEVELDB.md) for full implementation details.
 
