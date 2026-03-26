@@ -1136,13 +1136,17 @@ function ldb_deaths(name, line, wildcards)
 
    local count = 0
    for row in db:nrows(string.format(
-      "SELECT timestamp, mob_name, zone, level FROM deaths " ..
+      "SELECT timestamp, mob_name, zone, level, tier, remort FROM deaths " ..
       "ORDER BY timestamp DESC LIMIT %d", limit)) do
       count = count + 1
       local time_str = os.date("%Y-%m-%d %H:%M", row.timestamp)
-      local mob = row.mob_name or "unknown"
-      ColourNote("white", "", string.format("  %s - Lvl %d - %s (%s)",
-         time_str, row.level, mob, row.zone))
+      local mob = (row.mob_name and row.mob_name ~= "") and row.mob_name or "unknown"
+      local tr = ""
+      if row.tier and row.remort then
+         tr = string.format(" [T%dR%d]", row.tier, row.remort)
+      end
+      ColourNote("white", "", string.format("  %s - Lvl %-3d - %-25s (%s)%s",
+         time_str, row.level, mob, row.zone, tr))
    end
 
    if count == 0 then
