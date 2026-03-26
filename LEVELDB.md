@@ -35,11 +35,18 @@ BASIC:
   ldb off                 - Disable data collection
 
 QUERIES:
-  ldb level [N]           - Kill breakdown for level N (default: current level)
+  ldb level [N] [filter]  - Kill breakdown for level N (default: current level)
                             Tabular per-kill listing with totals and averages
                             At level 200+: N is a powerup number (default: current pup)
-  ldb this                - Shortcut for current level (or current powerup at 200+)
-  ldb last                - Shortcut for previous level (or previous powerup at 200+)
+  ldb this [filter]       - Shortcut for current level (or current powerup at 200+)
+  ldb last [filter]       - Shortcut for previous level (or previous powerup at 200+)
+
+  Filter options (level/this/last commands):
+    (default)             - Current tier and remort only
+    all                   - All tiers and remorts (separate sections)
+    T1 R5                 - Specific tier and remort
+    T1                    - All remorts within a tier (separate sections)
+    R4                    - Specific remort, current tier
   ldb zone [name]         - Stats for a zone (default: current zone)
                             Substring match; shows: kills, XP, avg XP/kill,
                             deaths, level range, top mobs
@@ -348,8 +355,19 @@ Powerup auto-adapt (ldb level, ldb this, ldb last):
 - ldb level [N]: N is a powerup number (default: current cached_pups)
 - ldb this: shows kills for current powerup (WHERE level=200 AND pup=N)
 - ldb last: shows kills for previous powerup (pup=N-1)
-- show_level_stats(level, pup) adds AND pup=N to WHERE clause when pup is provided
+- show_level_stats(level, pup, filter) adds AND pup=N to WHERE clause when pup is provided
 - Header displays "Powerup N kills:" instead of "Level N kills:"
+
+Tier/remort filtering (ldb level, ldb this, ldb last):
+- Default (no filter): queries with AND tier=cached_tier AND remort=cached_remorts
+- "all": queries for DISTINCT (tier, remort) combos at that level (excluding NULLs),
+  then renders each combo as a separate section with its own table and totals
+- "T1 R5": queries with AND tier=1 AND remort=5
+- "T1": queries for DISTINCT (tier, remort) combos WHERE tier=1 (multi-section)
+- "R4": queries with AND tier=cached_tier AND remort=4
+- parse_filter() parses the filter string, returns nil on invalid input
+- show_level_stats() orchestrates; show_level_stats_section() renders one section
+- Records with NULL tier or remort are silently excluded from all filtered queries
 
 ldb top xp:
 - Uses HAVING cnt >= 3 to exclude one-off kills that skew averages

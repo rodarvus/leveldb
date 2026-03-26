@@ -50,21 +50,21 @@
       script="ldb_off"
    ></alias>
    <alias
-      match="^ldb level(?: (\d+))?$"
+      match="^ldb level(?: (\d+))?(?: (.+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
       script="ldb_level"
    ></alias>
    <alias
-      match="^ldb this$"
+      match="^ldb this(?: (.+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
       script="ldb_thislevel"
    ></alias>
    <alias
-      match="^ldb last$"
+      match="^ldb last(?: (.+))?$"
       enabled="y"
       regexp="y"
       sequence="100"
@@ -579,6 +579,34 @@ local function require_db()
 end
 
 -- =============================================================================
+-- Helper: parse tier/remort filter from command arguments
+-- Returns: {all=true} or {tier=N, remort=N} or {tier=N} or {remort=N} or {}
+-- Returns nil on invalid input (error already printed)
+-- =============================================================================
+local function parse_filter(str)
+   if not str or str == "" then return {} end
+   local s = string.lower(string.match(str, "^%s*(.-)%s*$"))  -- trim
+
+   if s == "" then return {} end
+   if s == "all" then return {all = true} end
+
+   local filter = {}
+   local t = string.match(s, "t(%d+)")
+   local r = string.match(s, "r(%d+)")
+
+   if not t and not r then
+      ColourNote("red", "", PREFIX .. "Invalid filter: " .. str)
+      ColourNote("red", "", PREFIX .. "Use: all, T1 R5, R4, or T1")
+      return nil
+   end
+
+   if t then filter.tier = tonumber(t) end
+   if r then filter.remort = tonumber(r) end
+
+   return filter
+end
+
+-- =============================================================================
 -- Command: ldb (status)
 -- =============================================================================
 function ldb_status(name, line, wildcards)
@@ -625,10 +653,10 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb                     - Show status")
    ColourNote("cyan", "", "  ldb help                - Show this help")
    ColourNote("cyan", "", "  ldb on / off            - Enable/disable data collection")
-   ColourNote("cyan", "", "  ldb level [N]           - Kill breakdown for level N (default: current)")
+   ColourNote("cyan", "", "  ldb level [N] [filter]  - Kill breakdown for level N (default: current)")
    ColourNote("cyan", "", "                            At 200+: N is powerup number")
-   ColourNote("cyan", "", "  ldb this                - Kill breakdown for current level/powerup")
-   ColourNote("cyan", "", "  ldb last                - Kill breakdown for previous level/powerup")
+   ColourNote("cyan", "", "  ldb this [filter]       - Kill breakdown for current level/powerup")
+   ColourNote("cyan", "", "  ldb last [filter]       - Kill breakdown for previous level/powerup")
    ColourNote("cyan", "", "  ldb zone [name]         - Stats for a zone (default: current)")
    ColourNote("cyan", "", "  ldb mob <name>          - Stats for a mob (substring match)")
    ColourNote("cyan", "", "  ldb top mobs [N]        - Top N mobs by kill count (default 10)")
@@ -636,6 +664,12 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb top xp [N]          - Top N mobs by avg XP per kill (default 10)")
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
+   ColourNote("cyan", "", "")
+   ColourNote("cyan", "", "  Filters (level/this/last): default = current tier & remort")
+   ColourNote("cyan", "", "    all                   - All tiers and remorts (separate sections)")
+   ColourNote("cyan", "", "    T1 R5                 - Specific tier and remort")
+   ColourNote("cyan", "", "    T1                    - All remorts within a tier (separate sections)")
+   ColourNote("cyan", "", "    R4                    - Specific remort, current tier")
 end
 
 -- =============================================================================
@@ -658,23 +692,23 @@ end
 function ldb_level(name, line, wildcards)
    if not require_db() then return end
    local arg = tonumber(wildcards[1])
+   local filter = parse_filter(wildcards[2])
+   if not filter then return end
 
    if cached_level and cached_level >= 200 then
-      -- Powerup mode: argument is a powerup number (default: current pup)
       local pup = arg or cached_pups
       if not pup then
          ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
          return
       end
-      show_level_stats(cached_level, pup)
+      show_level_stats(cached_level, pup, filter)
    else
-      -- Normal mode: argument is a level number (default: current level)
       local level = arg or cached_level
       if not level then
          ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
          return
       end
-      show_level_stats(level)
+      show_level_stats(level, nil, filter)
    end
 end
 
@@ -683,6 +717,8 @@ end
 -- =============================================================================
 function ldb_thislevel(name, line, wildcards)
    if not require_db() then return end
+   local filter = parse_filter(wildcards[1])
+   if not filter then return end
    if not cached_level then
       ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
       return
@@ -692,9 +728,9 @@ function ldb_thislevel(name, line, wildcards)
          ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
          return
       end
-      show_level_stats(cached_level, cached_pups)
+      show_level_stats(cached_level, cached_pups, filter)
    else
-      show_level_stats(cached_level)
+      show_level_stats(cached_level, nil, filter)
    end
 end
 
@@ -703,6 +739,8 @@ end
 -- =============================================================================
 function ldb_lastlevel(name, line, wildcards)
    if not require_db() then return end
+   local filter = parse_filter(wildcards[1])
+   if not filter then return end
    if not cached_level then
       ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
       return
@@ -716,49 +754,46 @@ function ldb_lastlevel(name, line, wildcards)
          ColourNote("yellow", "", PREFIX .. "No previous powerup.")
          return
       end
-      show_level_stats(cached_level, cached_pups - 1)
+      show_level_stats(cached_level, cached_pups - 1, filter)
    else
       if cached_level <= 1 then
          ColourNote("yellow", "", PREFIX .. "No previous level.")
          return
       end
-      show_level_stats(cached_level - 1)
+      show_level_stats(cached_level - 1, nil, filter)
    end
 end
 
-function show_level_stats(level, pup)
-   -- Header adapts for powerup mode
-   if pup then
-      ColourNote("cyan", "", PREFIX .. "Powerup " .. pup .. " kills:")
-   else
-      ColourNote("cyan", "", PREFIX .. "Level " .. level .. " kills:")
-   end
+function show_level_stats_section(level, pup, tier, remort, label)
+   -- Build WHERE clause
+   local where = string.format("level = %d", level)
+   if pup then where = where .. string.format(" AND pup = %d", pup) end
+   if tier then where = where .. string.format(" AND tier = %d", tier) end
+   if remort then where = where .. string.format(" AND remort = %d", remort) end
 
-   -- Build query with optional pup filter
-   local kills_query, deaths_query
+   -- Header
+   local header
    if pup then
-      kills_query = string.format(
-         "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level " ..
-         "FROM kills WHERE level = %d AND pup = %d ORDER BY timestamp", level, pup)
-      deaths_query = string.format(
-         "SELECT COUNT(*) as cnt FROM deaths WHERE level = %d", level)
+      header = PREFIX .. "Powerup " .. pup .. " kills " .. label .. ":"
    else
-      kills_query = string.format(
-         "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level " ..
-         "FROM kills WHERE level = %d ORDER BY timestamp", level)
-      deaths_query = string.format(
-         "SELECT COUNT(*) as cnt FROM deaths WHERE level = %d", level)
+      header = PREFIX .. "Level " .. level .. " kills " .. label .. ":"
    end
+   ColourNote("cyan", "", header)
 
-   -- Collect all kills into a table for column width calculation
+   -- Fetch kills
+   local kills_query = "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level " ..
+      "FROM kills WHERE " .. where .. " ORDER BY timestamp"
    local kills = {}
    for row in db:nrows(kills_query) do
       table.insert(kills, row)
    end
 
-   -- Death count
+   -- Death count (deaths table has no pup column, filter by level + tier/remort)
+   local deaths_where = string.format("level = %d", level)
+   if tier then deaths_where = deaths_where .. string.format(" AND tier = %d", tier) end
+   if remort then deaths_where = deaths_where .. string.format(" AND remort = %d", remort) end
    local total_deaths = 0
-   for row in db:nrows(deaths_query) do
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. deaths_where) do
       total_deaths = row.cnt
    end
 
@@ -778,20 +813,17 @@ function show_level_stats(level, pup)
       if #k.mob_name > max_mob then max_mob = #k.mob_name end
       if #k.zone > max_zone then max_zone = #k.zone end
    end
-   -- Cap column widths
    if max_mob > 24 then max_mob = 24 end
    if max_zone > 20 then max_zone = 20 end
 
-   -- Row number width
    local num_w = #tostring(#kills)
    if num_w < 1 then num_w = 1 end
 
-   -- Helper to truncate strings
    local function trunc(s, w)
       if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
    end
 
-   -- Header
+   -- Column header
    local hdr = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s",
       "#", "Mob", "Zone", "XP", "Dmg", "Rnd", "MLvl")
    ColourNote("cyan", "", hdr)
@@ -800,7 +832,7 @@ function show_level_stats(level, pup)
       string.rep("-", 5) .. "  " .. string.rep("-", 3) .. "  " .. string.rep("-", 4)
    ColourNote("cyan", "", sep)
 
-   -- Data rows and running totals
+   -- Data rows
    local total_xp = 0
    local total_damage = 0
    local total_rounds = 0
@@ -821,7 +853,7 @@ function show_level_stats(level, pup)
    -- Footer
    ColourNote("cyan", "", sep)
 
-   local footer_label_w = num_w + 2 + max_mob  -- # col + gap + mob col
+   local footer_label_w = num_w + 2 + max_mob
 
    local tot_str = string.format("  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s",
       string.format("Tot %d kills", #kills), "",
@@ -840,6 +872,61 @@ function show_level_stats(level, pup)
 
    if total_deaths > 0 then
       ColourNote("red", "", "  Deaths: " .. total_deaths)
+   end
+end
+
+function show_level_stats(level, pup, filter)
+   filter = filter or {}
+
+   -- Determine if this is a multi-section or single-section query
+   local multi_section = filter.all or (filter.tier and not filter.remort)
+
+   if multi_section then
+      -- Build WHERE for combo discovery (exclude NULLs)
+      local where = string.format("level = %d AND tier IS NOT NULL AND remort IS NOT NULL", level)
+      if pup then where = where .. string.format(" AND pup = %d", pup) end
+      if filter.tier then where = where .. string.format(" AND tier = %d", filter.tier) end
+
+      local combos = {}
+      for row in db:nrows("SELECT DISTINCT tier, remort FROM kills WHERE " .. where ..
+         " ORDER BY tier, remort") do
+         table.insert(combos, {tier = row.tier, remort = row.remort})
+      end
+
+      if #combos == 0 then
+         local header
+         if pup then
+            header = PREFIX .. "Powerup " .. pup .. " kills:"
+         else
+            header = PREFIX .. "Level " .. level .. " kills:"
+         end
+         ColourNote("cyan", "", header)
+         local no_kills_msg = pup and "  No kills recorded for this powerup." or "  No kills recorded at this level."
+         ColourNote("yellow", "", no_kills_msg)
+         return
+      end
+
+      for i, combo in ipairs(combos) do
+         if i > 1 then Note("") end
+         local label = "(T" .. combo.tier .. " R" .. combo.remort .. ")"
+         show_level_stats_section(level, pup, combo.tier, combo.remort, label)
+      end
+   else
+      -- Single section: resolve tier and remort
+      local tier = filter.tier or cached_tier
+      local remort = filter.remort or cached_remorts
+
+      if not tier then
+         ColourNote("red", "", PREFIX .. "Current tier unknown. Try again after GMCP data arrives.")
+         return
+      end
+      if not remort then
+         ColourNote("red", "", PREFIX .. "Current remort unknown. Try again after GMCP data arrives.")
+         return
+      end
+
+      local label = "(T" .. tier .. " R" .. remort .. ")"
+      show_level_stats_section(level, pup, tier, remort, label)
    end
 end
 

@@ -22,9 +22,11 @@ The plugin is fully passive — it observes GMCP broadcasts and combat text with
 | `ldb` | Show status |
 | `ldb help` | List all commands |
 | `ldb on` / `ldb off` | Enable/disable data collection |
-| `ldb level [N]` | Per-kill table for a level (default: current) |
-| `ldb thislevel` | Per-kill table for current level |
-| `ldb lastlevel` | Per-kill table for previous level |
+| `ldb level [N] [filter]` | Per-kill table for a level (default: current) |
+| `ldb this [filter]` | Per-kill table for current level |
+| `ldb last [filter]` | Per-kill table for previous level |
+
+Filter options: default = current tier/remort. `all` = all tiers/remorts (separate sections). `T1 R5` = specific tier and remort. `T1` = all remorts within a tier. `R4` = specific remort, current tier.
 | `ldb zone [name]` | Stats for a zone (default: current; substring match) |
 | `ldb mob <name>` | Stats for a mob (substring match) |
 | `ldb top mobs [N]` | Top N mobs by kill count |
