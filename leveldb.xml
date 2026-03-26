@@ -113,6 +113,20 @@
       script="ldb_deaths"
    ></alias>
    <alias
+      match="^ldb remort(.*)$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_remort"
+   ></alias>
+   <alias
+      match="^ldb tier(.*)$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_tier"
+   ></alias>
+   <alias
       match="^ldb db$"
       enabled="y"
       regexp="y"
@@ -568,6 +582,33 @@ local function format_number(n)
 end
 
 -- =============================================================================
+-- Helper: format number abbreviated (1234 -> "1.2k", 1234567 -> "1.2M")
+-- =============================================================================
+local function format_abbreviated(n)
+   if not n or n == 0 then return "0" end
+   local abs_n = math.abs(n)
+   local sign = n < 0 and "-" or ""
+   if abs_n >= 1000000 then
+      return sign .. string.format("%.1fM", abs_n / 1000000)
+   elseif abs_n >= 1000 then
+      return sign .. string.format("%.1fk", abs_n / 1000)
+   else
+      return sign .. tostring(math.floor(abs_n))
+   end
+end
+
+-- =============================================================================
+-- Helper: bracket label and SQL CASE expression for level brackets
+-- =============================================================================
+local BRACKETS = {
+   {label = "1-50",    min = 1,   max = 50},
+   {label = "51-100",  min = 51,  max = 100},
+   {label = "101-150", min = 101, max = 150},
+   {label = "151-200", min = 151, max = 200},
+   {label = "Pups",    min = 201, max = 201},
+}
+
+-- =============================================================================
 -- Helper: check DB is available for queries
 -- =============================================================================
 local function require_db()
@@ -662,6 +703,13 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb top mobs [N]        - Top N mobs by kill count (default 10)")
    ColourNote("cyan", "", "  ldb top zones [N]       - Top N zones by total XP (default 10)")
    ColourNote("cyan", "", "  ldb top xp [N]          - Top N mobs by avg XP per kill (default 10)")
+   ColourNote("cyan", "", "  ldb remort [R] [T<n>]   - Bracket summary for a remort")
+   ColourNote("cyan", "", "                            Default: current tier & remort")
+   ColourNote("cyan", "", "                            ldb remort 4 = R4 current tier")
+   ColourNote("cyan", "", "                            ldb remort T1 R4 = T1 R4")
+   ColourNote("cyan", "", "  ldb tier [T]             - Compare remorts within a tier")
+   ColourNote("cyan", "", "                            Default: current tier")
+   ColourNote("cyan", "", "                            ldb tier 1 = T1")
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
    ColourNote("cyan", "", "")
@@ -927,6 +975,359 @@ function show_level_stats(level, pup, filter)
 
       local label = "(T" .. tier .. " R" .. remort .. ")"
       show_level_stats_section(level, pup, tier, remort, label)
+   end
+end
+
+-- =============================================================================
+-- Helper: parse remort command args - bare number = remort, T<n> = tier
+-- Returns {tier=N, remort=N} or {} for defaults, nil on error
+-- =============================================================================
+local function parse_remort_args(str)
+   if not str or str == "" then return {} end
+   local s = string.lower(string.match(str, "^%s*(.-)%s*$"))
+   if s == "" then return {} end
+
+   local result = {}
+   local t = string.match(s, "t(%d+)")
+   local r = string.match(s, "r(%d+)")
+   local bare = string.match(s, "^(%d+)$")
+
+   if bare then
+      result.remort = tonumber(bare)
+   else
+      if t then result.tier = tonumber(t) end
+      if r then result.remort = tonumber(r) end
+      if not t and not r then
+         ColourNote("red", "", PREFIX .. "Invalid arguments: " .. str)
+         ColourNote("red", "", PREFIX .. "Use: ldb remort [R] [T<n>]")
+         return nil
+      end
+   end
+   return result
+end
+
+-- =============================================================================
+-- Helper: parse tier command args - bare number = tier
+-- Returns {tier=N} or {} for defaults, nil on error
+-- =============================================================================
+local function parse_tier_args(str)
+   if not str or str == "" then return {} end
+   local s = string.lower(string.match(str, "^%s*(.-)%s*$"))
+   if s == "" then return {} end
+
+   local bare = string.match(s, "^(%d+)$")
+   local t = string.match(s, "t(%d+)")
+
+   if bare then
+      return {tier = tonumber(bare)}
+   elseif t then
+      return {tier = tonumber(t)}
+   else
+      ColourNote("red", "", PREFIX .. "Invalid arguments: " .. str)
+      ColourNote("red", "", PREFIX .. "Use: ldb tier [T]")
+      return nil
+   end
+end
+
+-- =============================================================================
+-- Helper: query bracket stats for a given tier + remort
+-- Returns table of bracket results, total kills, total deaths
+-- =============================================================================
+local function query_bracket_stats(tier, remort)
+   local results = {}
+   local grand_kills = 0
+   local grand_deaths = 0
+
+   for _, br in ipairs(BRACKETS) do
+      local where_k = string.format(
+         "tier = %d AND remort = %d AND level >= %d AND level <= %d",
+         tier, remort, br.min, br.max)
+      local where_d = string.format(
+         "tier = %d AND remort = %d AND level >= %d AND level <= %d",
+         tier, remort, br.min, br.max)
+
+      local row_data = {
+         label = br.label,
+         kills = 0, avg_xp = 0, avg_dmg = 0, avg_gap = nil,
+         avg_rnd = 0, zones = 0, deaths = 0,
+      }
+
+      for row in db:nrows(
+         "SELECT COUNT(*) as cnt, " ..
+         "COALESCE(AVG(xp_gained), 0) as avg_xp, " ..
+         "COALESCE(AVG(damage_total), 0) as avg_dmg, " ..
+         "AVG(CASE WHEN mob_level IS NOT NULL THEN mob_level - level ELSE NULL END) as avg_gap, " ..
+         "COALESCE(AVG(rounds), 0) as avg_rnd, " ..
+         "COUNT(DISTINCT zone) as zones " ..
+         "FROM kills WHERE " .. where_k) do
+         row_data.kills = row.cnt
+         row_data.avg_xp = row.avg_xp
+         row_data.avg_dmg = row.avg_dmg
+         row_data.avg_gap = row.avg_gap
+         row_data.avg_rnd = row.avg_rnd
+         row_data.zones = row.zones
+      end
+
+      for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. where_d) do
+         row_data.deaths = row.cnt
+      end
+
+      grand_kills = grand_kills + row_data.kills
+      grand_deaths = grand_deaths + row_data.deaths
+      table.insert(results, row_data)
+   end
+
+   return results, grand_kills, grand_deaths
+end
+
+-- =============================================================================
+-- Helper: render bracket table (used by both ldb remort and ldb tier)
+-- =============================================================================
+local function render_bracket_table(rows, show_header)
+   if show_header then
+      ColourNote("cyan", "", string.format(
+         "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+         "Bracket", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
+      ColourNote("cyan", "", string.format(
+         "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+         "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
+   end
+
+   local grand_kills = 0
+   local grand_xp_sum = 0
+   local grand_dmg_sum = 0
+   local grand_gap_sum = 0
+   local grand_gap_count = 0
+   local grand_rnd_sum = 0
+   local grand_zones_set = {}  -- can't easily union, use total unique
+   local grand_deaths = 0
+
+   for _, r in ipairs(rows) do
+      grand_kills = grand_kills + r.kills
+      grand_deaths = grand_deaths + r.deaths
+
+      if r.kills == 0 then
+         ColourNote("white", "", string.format(
+            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+            r.label, "-", "-", "-", "-", "-", "-",
+            r.deaths > 0 and tostring(r.deaths) or "-"))
+      else
+         grand_xp_sum = grand_xp_sum + (r.avg_xp * r.kills)
+         grand_dmg_sum = grand_dmg_sum + (r.avg_dmg * r.kills)
+         grand_rnd_sum = grand_rnd_sum + (r.avg_rnd * r.kills)
+         if r.avg_gap then
+            grand_gap_sum = grand_gap_sum + (r.avg_gap * r.kills)
+            grand_gap_count = grand_gap_count + r.kills
+         end
+
+         local gap_str = "-"
+         if r.avg_gap then
+            gap_str = string.format("%+.1f", r.avg_gap)
+         end
+
+         ColourNote("white", "", string.format(
+            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5d  %6s",
+            r.label,
+            format_abbreviated(r.kills),
+            format_abbreviated(math.floor(r.avg_xp)),
+            format_abbreviated(math.floor(r.avg_dmg)),
+            gap_str,
+            string.format("%.1f", r.avg_rnd),
+            r.zones,
+            r.deaths > 0 and tostring(r.deaths) or "-"))
+      end
+   end
+
+   -- Total row
+   ColourNote("cyan", "", string.format(
+      "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+      "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
+
+   local tot_avg_xp = grand_kills > 0 and format_abbreviated(math.floor(grand_xp_sum / grand_kills)) or "-"
+   local tot_avg_dmg = grand_kills > 0 and format_abbreviated(math.floor(grand_dmg_sum / grand_kills)) or "-"
+   local tot_avg_gap = grand_gap_count > 0 and string.format("%+.1f", grand_gap_sum / grand_gap_count) or "-"
+   local tot_avg_rnd = grand_kills > 0 and string.format("%.1f", grand_rnd_sum / grand_kills) or "-"
+
+   ColourNote("white", "", string.format(
+      "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+      "Total",
+      format_abbreviated(grand_kills),
+      tot_avg_xp,
+      tot_avg_dmg,
+      tot_avg_gap,
+      tot_avg_rnd,
+      "",
+      grand_deaths > 0 and tostring(grand_deaths) or "-"))
+end
+
+-- =============================================================================
+-- Command: ldb remort [R] [T<n>]
+-- =============================================================================
+function ldb_remort(name, line, wildcards)
+   if not require_db() then return end
+
+   local args = parse_remort_args(wildcards[1])
+   if not args then return end
+
+   local tier = args.tier or cached_tier
+   local remort = args.remort or cached_remorts
+
+   if not tier then
+      ColourNote("red", "", PREFIX .. "Current tier unknown. Try again after GMCP data arrives.")
+      return
+   end
+   if not remort then
+      ColourNote("red", "", PREFIX .. "Current remort unknown. Try again after GMCP data arrives.")
+      return
+   end
+
+   local results, grand_kills, grand_deaths = query_bracket_stats(tier, remort)
+
+   -- Header
+   local death_str = grand_deaths > 0 and (", " .. grand_deaths .. " deaths") or ""
+   ColourNote("cyan", "", string.format(
+      "%sRemort summary - T%d R%d (%s kills%s):",
+      PREFIX, tier, remort, format_number(grand_kills), death_str))
+
+   if grand_kills == 0 then
+      ColourNote("yellow", "", "  No kills recorded for this remort.")
+      return
+   end
+
+   render_bracket_table(results, true)
+end
+
+-- =============================================================================
+-- Command: ldb tier [T]
+-- =============================================================================
+function ldb_tier(name, line, wildcards)
+   if not require_db() then return end
+
+   local args = parse_tier_args(wildcards[1])
+   if not args then return end
+
+   local tier = args.tier or cached_tier
+
+   if not tier then
+      ColourNote("red", "", PREFIX .. "Current tier unknown. Try again after GMCP data arrives.")
+      return
+   end
+
+   -- Find all remorts for this tier
+   local remorts = {}
+   for row in db:nrows(string.format(
+      "SELECT DISTINCT remort FROM kills WHERE tier = %d AND remort IS NOT NULL " ..
+      "ORDER BY remort", tier)) do
+      table.insert(remorts, row.remort)
+   end
+
+   if #remorts == 0 then
+      ColourNote("cyan", "", string.format("%sTier summary - T%d:", PREFIX, tier))
+      ColourNote("yellow", "", "  No kills recorded for this tier.")
+      return
+   end
+
+   -- Count totals for header
+   local tier_kills = 0
+   local tier_deaths = 0
+   for row in db:nrows(string.format(
+      "SELECT COUNT(*) as cnt FROM kills WHERE tier = %d AND remort IS NOT NULL", tier)) do
+      tier_kills = row.cnt
+   end
+   for row in db:nrows(string.format(
+      "SELECT COUNT(*) as cnt FROM deaths WHERE tier = %d AND remort IS NOT NULL", tier)) do
+      tier_deaths = row.cnt
+   end
+
+   local death_str = tier_deaths > 0 and (", " .. tier_deaths .. " deaths") or ""
+   ColourNote("cyan", "", string.format(
+      "%sTier summary - T%d (%d remorts, %s kills%s):",
+      PREFIX, tier, #remorts, format_number(tier_kills), death_str))
+
+   -- For each bracket, show a section with one row per remort
+   for bi, br in ipairs(BRACKETS) do
+      if bi > 1 then Note("") end
+
+      -- Check if any remort has data in this bracket
+      local bracket_has_data = false
+      local bracket_rows = {}
+      for _, rm in ipairs(remorts) do
+         local where_k = string.format(
+            "tier = %d AND remort = %d AND level >= %d AND level <= %d",
+            tier, rm, br.min, br.max)
+         local where_d = string.format(
+            "tier = %d AND remort = %d AND level >= %d AND level <= %d",
+            tier, rm, br.min, br.max)
+
+         local row_data = {
+            label = "R" .. rm,
+            kills = 0, avg_xp = 0, avg_dmg = 0, avg_gap = nil,
+            avg_rnd = 0, zones = 0, deaths = 0,
+         }
+
+         for row in db:nrows(
+            "SELECT COUNT(*) as cnt, " ..
+            "COALESCE(AVG(xp_gained), 0) as avg_xp, " ..
+            "COALESCE(AVG(damage_total), 0) as avg_dmg, " ..
+            "AVG(CASE WHEN mob_level IS NOT NULL THEN mob_level - level ELSE NULL END) as avg_gap, " ..
+            "COALESCE(AVG(rounds), 0) as avg_rnd, " ..
+            "COUNT(DISTINCT zone) as zones " ..
+            "FROM kills WHERE " .. where_k) do
+            row_data.kills = row.cnt
+            row_data.avg_xp = row.avg_xp
+            row_data.avg_dmg = row.avg_dmg
+            row_data.avg_gap = row.avg_gap
+            row_data.avg_rnd = row.avg_rnd
+            row_data.zones = row.zones
+         end
+
+         for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. where_d) do
+            row_data.deaths = row.cnt
+         end
+
+         if row_data.kills > 0 or row_data.deaths > 0 then
+            bracket_has_data = true
+         end
+         table.insert(bracket_rows, row_data)
+      end
+
+      ColourNote("cyan", "", "  -- " .. br.label .. " --")
+      if not bracket_has_data then
+         ColourNote("yellow", "", "    No data.")
+      else
+         -- Render header using "Remort" instead of "Bracket" for this context
+         ColourNote("cyan", "", string.format(
+            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+            "Remort", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
+         ColourNote("cyan", "", string.format(
+            "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+            "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
+
+         for _, r in ipairs(bracket_rows) do
+            if r.kills == 0 then
+               ColourNote("white", "", string.format(
+                  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s",
+                  r.label, "-", "-", "-", "-", "-", "-",
+                  r.deaths > 0 and tostring(r.deaths) or "-"))
+            else
+               local gap_str = "-"
+               if r.avg_gap then
+                  gap_str = string.format("%+.1f", r.avg_gap)
+               end
+
+               ColourNote("white", "", string.format(
+                  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5d  %6s",
+                  r.label,
+                  format_abbreviated(r.kills),
+                  format_abbreviated(math.floor(r.avg_xp)),
+                  format_abbreviated(math.floor(r.avg_dmg)),
+                  gap_str,
+                  string.format("%.1f", r.avg_rnd),
+                  r.zones,
+                  r.deaths > 0 and tostring(r.deaths) or "-"))
+            end
+         end
+      end
    end
 end
 

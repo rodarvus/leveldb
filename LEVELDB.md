@@ -47,6 +47,17 @@ QUERIES:
     T1 R5                 - Specific tier and remort
     T1                    - All remorts within a tier (separate sections)
     R4                    - Specific remort, current tier
+  ldb remort [R] [T<n>]   - Bracket summary for one remort (1-50, 51-100,
+                            101-150, 151-200, Pups). Shows kills, avg XP,
+                            avg damage, avg level gap, avg rounds, zones,
+                            deaths per bracket. Default: current tier & remort.
+                            ldb remort 4 = R4 current tier
+                            ldb remort T1 R4 = specific tier and remort
+  ldb tier [T]             - Compare remorts within a tier. Shows bracket
+                            sections (1-50, 51-100, etc.), each with one row
+                            per remort for side-by-side comparison.
+                            Default: current tier. ldb tier 1 = tier 1.
+
   ldb zone [name]         - Stats for a zone (default: current zone)
                             Substring match; shows: kills, XP, avg XP/kill,
                             deaths, level range, top mobs
