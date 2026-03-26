@@ -1,11 +1,11 @@
 ================================================================================
 LEVELDB PLUGIN - IMPLEMENTATION GUIDE
 ================================================================================
-Last Updated: 2026-02-23
+Last Updated: 2026-03-26
 Plugin File: leveldb.xml
 Plugin ID: b34c04e52c6c7bced4508230
 Author: Rodarvus
-Current Version: 4.0
+Current Version: 5.0
 
 ================================================================================
 OVERVIEW
@@ -17,12 +17,19 @@ entire leveling journey.
 
 Key Features:
 - Per-kill records: mob name, zone, room, level, XP, mob level, damage, rounds
-- Per-death records: mob, zone, room, level
+- Per-death records: mob, zone, room, level, tier, remort
 - Tier and remort tracked as columns in every record
+- Tier/remort filtering: level/this/last commands default to current tier+remort,
+  with optional filters (all, T1 R5, R4, T1)
+- Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200, Pups) with
+  avg XP, damage, level gap, rounds, zones, deaths, and pup count
+- Tier summary: compare remorts within a tier, organized by bracket sections
 - Powerup support: at level 200+ (Hero/Superhero), queries auto-adapt to segment
-  by powerup number instead of level
+  by powerup number instead of level. Pups bracket filters out low-level mob kills
+  (area goal completions) and shows power-up count.
 - Single database file (leveldb.db) for all data
 - Rich query commands: per-level, per-zone, per-mob breakdowns, top-N rankings
+- GMCP state restored on plugin reload (no stale cache after mid-session reload)
 
 ================================================================================
 COMMANDS
@@ -438,7 +445,36 @@ Documentation:
   - README.md - user documentation
 
 ================================================================================
-FUTURE CONSIDERATIONS (NOT IN V4)
+VERSION HISTORY
+================================================================================
+
+v5.0 (2026-03-26):
+  - Tier/remort filtering for level/this/last commands (default: current T+R)
+  - New command: ldb remort - bracket summary (1-50, 51-100, 101-150, 151-200,
+    Pups) with avg XP, damage, level gap, rounds, zones, deaths, pup count
+  - New command: ldb tier - compare remorts within a tier by bracket
+  - Pups bracket: filters out low-level mob kills (area goals), shows pup count
+  - Deaths output now shows mob name, tier, and remort
+  - GMCP state restored on plugin reload (fixes stale cache issue)
+  - Added format_abbreviated() for compact large numbers (1.2k, 3.4M)
+  - Defensive COALESCE in aggregate queries
+  - Refactored bracket queries to eliminate code duplication
+
+v4.0 (2026-02-23):
+  - Added mob_level estimation via sacrifice gold
+  - MLvl column in level reports
+
+v3.0:
+  - Added powerup (pup) tracking for level 200+
+
+v2.0:
+  - Added tier and remort columns to kills and deaths tables
+
+v1.0:
+  - Initial release: kill/death tracking, per-level/zone/mob queries
+
+================================================================================
+FUTURE CONSIDERATIONS
 ================================================================================
 
 - Session tracking / XP-per-hour calculation
@@ -450,6 +486,7 @@ FUTURE CONSIDERATIONS (NOT IN V4)
 - Level time estimation
 - ldb history command (XP/hour graph)
 - ldb leveltime command (average time per level)
+- Cross-remort comparison tables (same level across remorts)
 
 ================================================================================
 END OF IMPLEMENTATION GUIDE

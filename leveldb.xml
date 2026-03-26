@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="4.0"
+   version="5.0"
    save_state="y"
    >
 
@@ -1257,74 +1257,38 @@ function ldb_tier(name, line, wildcards)
       "%sTier summary - T%d (%d remorts, %s kills%s):",
       PREFIX, tier, #remorts, format_number(tier_kills), death_str))
 
+   -- Query bracket stats for all remorts up front (reuse query_bracket_stats)
+   local all_remort_data = {}
+   for _, rm in ipairs(remorts) do
+      all_remort_data[rm] = query_bracket_stats(tier, rm)
+   end
+
    -- For each bracket, show a section with one row per remort
+   local tier_fmt = "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s  %4s"
    for bi, br in ipairs(BRACKETS) do
       if bi > 1 then Note("") end
 
-      -- Check if any remort has data in this bracket
-      local is_pups = (br.min == 201)
+      -- Collect the bi-th bracket row from each remort's results
       local bracket_has_data = false
       local bracket_rows = {}
       for _, rm in ipairs(remorts) do
-         local where_k = string.format(
-            "tier = %d AND remort = %d AND level >= %d AND level <= %d",
-            tier, rm, br.min, br.max)
-         -- For Pups bracket, exclude low-level mob kills (goal completions etc.)
-         if is_pups then
-            where_k = where_k .. " AND (mob_level IS NULL OR mob_level > 200)"
-         end
-         local where_d = string.format(
-            "tier = %d AND remort = %d AND level >= %d AND level <= %d",
-            tier, rm, br.min, br.max)
-
+         local r = all_remort_data[rm][bi]
          local row_data = {
             label = "R" .. rm,
-            kills = 0, avg_xp = 0, avg_dmg = 0, avg_gap = nil,
-            avg_rnd = 0, zones = 0, deaths = 0, pup_count = 0,
+            kills = r.kills, avg_xp = r.avg_xp, avg_dmg = r.avg_dmg,
+            avg_gap = r.avg_gap, avg_rnd = r.avg_rnd, zones = r.zones,
+            deaths = r.deaths, pup_count = r.pup_count,
          }
-
-         for row in db:nrows(
-            "SELECT COUNT(*) as cnt, " ..
-            "COALESCE(AVG(xp_gained), 0) as avg_xp, " ..
-            "COALESCE(AVG(damage_total), 0) as avg_dmg, " ..
-            "AVG(CASE WHEN mob_level IS NOT NULL THEN mob_level - level ELSE NULL END) as avg_gap, " ..
-            "COALESCE(AVG(rounds), 0) as avg_rnd, " ..
-            "COUNT(DISTINCT zone) as zones " ..
-            "FROM kills WHERE " .. where_k) do
-            row_data.kills = row.cnt
-            row_data.avg_xp = row.avg_xp
-            row_data.avg_dmg = row.avg_dmg
-            row_data.avg_gap = row.avg_gap
-            row_data.avg_rnd = row.avg_rnd
-            row_data.zones = row.zones
-         end
-
-         -- Pup count (only meaningful for Pups bracket)
-         if is_pups then
-            for row in db:nrows(string.format(
-               "SELECT COUNT(DISTINCT pup) as cnt FROM kills WHERE " ..
-               "tier = %d AND remort = %d AND level >= 201 AND pup IS NOT NULL",
-               tier, rm)) do
-               row_data.pup_count = row.cnt
-            end
-         end
-
-         for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. where_d) do
-            row_data.deaths = row.cnt
-         end
-
          if row_data.kills > 0 or row_data.deaths > 0 then
             bracket_has_data = true
          end
          table.insert(bracket_rows, row_data)
       end
 
-      local tier_fmt = "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s  %4s"
       ColourNote("cyan", "", "  -- " .. br.label .. " --")
       if not bracket_has_data then
          ColourNote("yellow", "", "    No data.")
       else
-         -- Render header using "Remort" instead of "Bracket" for this context
          ColourNote("cyan", "", string.format(tier_fmt,
             "Remort", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths", "Pups"))
          ColourNote("cyan", "", string.format(tier_fmt,
@@ -1491,7 +1455,7 @@ function ldb_top_mobs(name, line, wildcards)
 
    local count = 0
    for row in db:nrows(string.format(
-      "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
+      "SELECT mob_name, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp " ..
       "FROM kills " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT %d", limit)) do
       count = count + 1
@@ -1515,7 +1479,7 @@ function ldb_top_zones(name, line, wildcards)
 
    local count = 0
    for row in db:nrows(string.format(
-      "SELECT zone, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
+      "SELECT zone, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp " ..
       "FROM kills " ..
       "GROUP BY zone ORDER BY xp DESC LIMIT %d", limit)) do
       count = count + 1
