@@ -288,7 +288,10 @@ PLUGIN LIFECYCLE
 OnPluginInstall:
   1. Restore enabled state from saved variable
   2. Open database (leveldb.db)
-  3. Display load message
+  3. Read current GMCP state (char.base, char.status, room.info) via gmcp()
+     to populate cached values. Handles mid-session plugin reload where
+     these broadcasts have already been sent and won't repeat.
+  4. Display load message
 
 OnPluginBroadcast (char.base):
   - Caches perlevel, tier, remort, and pups values from GMCP

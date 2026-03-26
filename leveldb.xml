@@ -1192,6 +1192,31 @@ function OnPluginInstall()
    enabled = (GetVariable("enabled") == "true")
    open_db()
 
+   -- Read current GMCP state (may have been broadcast before plugin load/reload)
+   local base = gmcp("char.base")
+   if base then
+      if base.perlevel then cached_perlevel = tonumber(base.perlevel) or 1000 end
+      if base.tier then cached_tier = tonumber(base.tier) end
+      if base.remorts then cached_remorts = tonumber(base.remorts) end
+      if base.pups then cached_pups = tonumber(base.pups) end
+   end
+
+   local status = gmcp("char.status")
+   if status then
+      local new_level = tonumber(status.level)
+      local new_tnl = tonumber(status.tnl)
+      if new_level and new_level ~= -1 then cached_level = new_level end
+      if new_tnl and new_tnl ~= -1 then cached_tnl = new_tnl end
+      cached_enemy = status.enemy or ""
+   end
+
+   local room = gmcp("room.info")
+   if room then
+      cached_zone = room.zone
+      cached_room_num = tonumber(room.num)
+      cached_room_name = room.name
+   end
+
    if enabled then
       ColourNote("cyan", "", PREFIX .. "Loaded (enabled).")
    else
