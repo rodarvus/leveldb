@@ -60,6 +60,8 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 
 **Filter options** (for level/this/last/quest/cp): default = current tier and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T1` = all remorts within a tier. `R4` = specific remort, current tier.
 
+See [USAGE.md](USAGE.md) for detailed descriptions and example output for every command.
+
 ## Installation
 
 1. Copy `leveldb.xml` into your MUSHclient `worlds/plugins/` directory.
