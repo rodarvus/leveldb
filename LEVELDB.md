@@ -728,6 +728,9 @@ v8.0 (2026-04-01):
   - All queries filter by COALESCE(redo, 0) for backward compatibility
   - format_tier_label() and redo_where() helpers
   - ldb status shows redo when > 0
+  - ldb level N at 200+ now queries that level (only bare ldb level redirects to pup)
+  - ldb remort total row shows distinct zone count across all brackets
+  - ldb pup / ldb pup list show timestamp and chronological order
 
 v7.0 (2026-04-01):
   - Powerup module redesign: productivity-focused tracking

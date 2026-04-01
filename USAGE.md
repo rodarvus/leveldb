@@ -126,13 +126,13 @@ Shows powerup summary and per-area productivity table for your current tier and 
   fortune               5    106    1.8s      17.0s    1124
 
   Recent powerups:
-     ID  T/R    Pup#  Zone              Trains
-  -----  -----  -----  ----------------  ------
-     42  T2R5       8  icefall                7
-     41  T2R5       7  icefall                5
-     40  T2R5       6  icefall                5
-     39  T2R5       5  fens                   6
-     38  T2R5       4  icefall                5
+     ID  When              T/R      Pup#  Zone              Trains
+  -----  ----------------  -------  -----  ----------------  ------
+     38  2026-03-28 22:26  T2R5         4  icefall                5
+     39  2026-03-28 22:26  T2R5         5  fens                   6
+     40  2026-03-28 22:27  T2R5         6  icefall                5
+     41  2026-03-28 22:27  T2R5         7  icefall                5
+     42  2026-03-28 22:28  T2R5         8  icefall                7
 ```
 
 Use `ldb pup 42` to see per-kill detail for a specific powerup, or `ldb pup list` to see more.
@@ -182,16 +182,16 @@ Column guide:
 > ldb pup list
 
 [LevelDB] Last 10 powerups (T2 R5):
-     ID  T/R    Pup#  Zone              Trains
-  -----  -----  -----  ----------------  ------
-     42  T2R5       8  icefall                7
-     41  T2R5       7  icefall                5
-     40  T2R5       6  icefall                5
-     39  T2R5       5  fens                   6
-     38  T2R5       4  icefall                5
-     37  T2R5       3  icefall                5
-     36  T2R5       2  fortune                6
-     35  T2R5       1  icefall                5
+     ID  When              T/R      Pup#  Zone              Trains
+  -----  ----------------  -------  -----  ----------------  ------
+     35  2026-03-28 22:24  T2R5         1  icefall                5
+     36  2026-03-28 22:25  T2R5         2  fortune                6
+     37  2026-03-28 22:25  T2R5         3  icefall                5
+     38  2026-03-28 22:26  T2R5         4  icefall                5
+     39  2026-03-28 22:26  T2R5         5  fens                   6
+     40  2026-03-28 22:27  T2R5         6  icefall                5
+     41  2026-03-28 22:27  T2R5         7  icefall                5
+     42  2026-03-28 22:28  T2R5         8  icefall                7
 ```
 
 ### `ldb zone [name]` — Zone Stats
