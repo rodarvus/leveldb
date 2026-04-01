@@ -656,7 +656,9 @@
    <!-- Silent gq check parsing triggers (disabled, gag output)      -->
    <!-- ============================================================ -->
 
-   <!-- gq check: mob line -->
+   <!-- gq check: mob line (format 1: before gquest starts) -->
+   <!-- [* 1] Jille                 - beer       -->
+   <!-- [* 4] 2 * billows of smoke  - fireswamp  -->
    <trigger
       name="trg_ldb_gqcheck_mob"
       match="^\[\*?\s*\d+\]\s+(?:(\d+) \* )?(.+?)\s+-\s+(\w+)\s*$"
@@ -665,6 +667,19 @@
       keep_evaluating="y"
       omit_from_output="y"
       script="ldb_on_gqcheck_mob"
+      sequence="89"
+   ></trigger>
+   <!-- gq check: mob line (format 2: after gquest starts) -->
+   <!-- You still have to kill 2 * a sinister vandal (The Three Pillars of Diatz) -->
+   <!-- You still have to kill 1 * a mutated goat (The Killing Fields - Dead)     -->
+   <trigger
+      name="trg_ldb_gqcheck_mob2"
+      match="^You still have to kill (\d+) \* (.+) \((.+?)(?:\s*-\s*Dead)?\)\s*$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqcheck_mob2"
       sequence="89"
    ></trigger>
 
@@ -690,10 +705,10 @@
       sequence="89"
    ></trigger>
 
-   <!-- gq check: header/separator gag -->
+   <!-- gq check: header/separator/footer gag -->
    <trigger
       name="trg_ldb_gqcheck_gag"
-      match="^(?:Index\s+Target|-{20,})"
+      match="^(?:Index\s+Target|-{20,}|Note: Dead means)"
       enabled="n"
       regexp="y"
       keep_evaluating="y"
@@ -1742,6 +1757,7 @@ local function enable_gqcheck_parsing()
    gqinfo_mob_buffer = {}
    gqcheck_generation = gqcheck_generation + 1
    EnableTrigger("trg_ldb_gqcheck_mob", true)
+   EnableTrigger("trg_ldb_gqcheck_mob2", true)
    EnableTrigger("trg_ldb_gqcheck_none", true)
    EnableTrigger("trg_ldb_gqcheck_norun", true)
    EnableTrigger("trg_ldb_gqcheck_gag", true)
@@ -1753,6 +1769,7 @@ end
 local function disable_gqcheck_parsing()
    gqcheck_generation = gqcheck_generation + 1  -- invalidate any pending timeout
    EnableTrigger("trg_ldb_gqcheck_mob", false)
+   EnableTrigger("trg_ldb_gqcheck_mob2", false)
    EnableTrigger("trg_ldb_gqcheck_none", false)
    EnableTrigger("trg_ldb_gqcheck_norun", false)
    EnableTrigger("trg_ldb_gqcheck_gag", false)
@@ -2075,6 +2092,23 @@ function ldb_on_gqcheck_mob(name, line, wildcards)
    end
    table.insert(gqinfo_mob_buffer, {name = mob_name, area = area, count = count})
    -- Reset timeout: bump generation so old timer becomes stale, schedule new one
+   gqcheck_generation = gqcheck_generation + 1
+   DoAfterSpecial(1, "gqcheck_timeout(" .. gqcheck_generation .. ")", 12)
+end
+
+-- Format 2: "You still have to kill N * mob (area)" (after gquest starts)
+function ldb_on_gqcheck_mob2(name, line, wildcards)
+   local count = tonumber(wildcards[1]) or 1
+   local mob_name = wildcards[2]
+   local area = wildcards[3]
+   if mob_name then
+      mob_name = string.match(mob_name, "^%s*(.-)%s*$")
+   end
+   if area then
+      area = string.match(area, "^%s*(.-)%s*$")
+   end
+   table.insert(gqinfo_mob_buffer, {name = mob_name, area = area, count = count})
+   -- Reset timeout (same as format 1)
    gqcheck_generation = gqcheck_generation + 1
    DoAfterSpecial(1, "gqcheck_timeout(" .. gqcheck_generation .. ")", 12)
 end
