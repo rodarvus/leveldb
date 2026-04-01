@@ -351,10 +351,10 @@
       sequence="89"
    ></trigger>
 
-   <!-- cp info: closing separator (plain dashes only, no brackets) -->
+   <!-- cp info: "Use 'cp check'" line (true last line of cp info) -->
    <trigger
       name="trg_ldb_cpinfo_end"
-      match="^-{20,}$"
+      match="^Use 'cp check'"
       enabled="n"
       regexp="y"
       keep_evaluating="y"
@@ -366,7 +366,7 @@
    <!-- cp info: catch-all gag for header/metadata/other lines -->
    <trigger
       name="trg_ldb_cpinfo_gag"
-      match="^(?:-+\[|Complete By|Time Left|Training Session|Practice|The targets for|Use 'cp check'|$)"
+      match="^(?:-+\[|Complete By|Time Left|Training Session|Practice|The targets for|-{20,}|$)"
       enabled="n"
       regexp="y"
       keep_evaluating="y"
