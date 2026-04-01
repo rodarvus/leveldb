@@ -2324,7 +2324,7 @@ end
 -- =============================================================================
 -- Helper: render bracket table (used by both ldb remort and ldb tier)
 -- =============================================================================
-local function render_bracket_table(rows, show_header)
+local function render_bracket_table(rows, show_header, grand_zones)
    local fmt =  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s"
    if show_header then
       ColourNote("cyan", "", string.format(fmt,
@@ -2384,6 +2384,7 @@ local function render_bracket_table(rows, show_header)
    local tot_avg_gap = grand_gap_count > 0 and string.format("%+.1f", grand_gap_sum / grand_gap_count) or "-"
    local tot_avg_rnd = grand_kills > 0 and string.format("%.1f", grand_rnd_sum / grand_kills) or "-"
 
+   local zones_str = grand_zones and tostring(grand_zones) or ""
    ColourNote("white", "", string.format(fmt,
       "Total",
       format_abbreviated(grand_kills),
@@ -2391,7 +2392,7 @@ local function render_bracket_table(rows, show_header)
       tot_avg_dmg,
       tot_avg_gap,
       tot_avg_rnd,
-      "",
+      zones_str,
       grand_deaths > 0 and tostring(grand_deaths) or "-"))
 end
 
@@ -2421,6 +2422,15 @@ function ldb_remort(name, line, wildcards)
 
    local results, grand_kills, grand_deaths = query_bracket_stats(tier, remort, redo)
 
+   -- Total distinct zones across all brackets (a zone can span multiple brackets)
+   local grand_zones = 0
+   for row in db:nrows(string.format(
+      "SELECT COUNT(DISTINCT zone) as cnt FROM kills WHERE tier = %d AND remort = %d AND %s " ..
+      "AND level >= 1 AND level <= 200",
+      tier, remort, redo_where(redo))) do
+      grand_zones = row.cnt
+   end
+
    -- Header
    local death_str = grand_deaths > 0 and (", " .. grand_deaths .. " deaths") or ""
    ColourNote("cyan", "", string.format(
@@ -2432,7 +2442,7 @@ function ldb_remort(name, line, wildcards)
       return
    end
 
-   render_bracket_table(results, true)
+   render_bracket_table(results, true, grand_zones)
 
    -- Pup section
    local pup_where_clause = string.format("tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo))
