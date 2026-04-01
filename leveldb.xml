@@ -1612,7 +1612,7 @@ function ldb_level(name, line, wildcards)
    local filter = parse_args(wildcards[2])
    if not filter then return end
 
-   if cached_level and cached_level >= 200 then
+   if not arg and cached_level and cached_level >= 200 then
       ColourNote("cyan", "", PREFIX .. "Use 'ldb pup' for powerup stats.")
       return
    end
