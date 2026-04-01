@@ -12,9 +12,13 @@ Type `ldb on` to start collecting. Everything else is automatic.
 |---------|-------------|
 | `ldb` | Status overview |
 | `ldb on` / `ldb off` | Toggle data collection |
-| `ldb this` | Kills for current level or powerup |
-| `ldb last` | Kills for previous level or powerup |
+| `ldb this` | Kills for current level |
+| `ldb last` | Kills for previous level |
 | `ldb level 42` | Kills for a specific level |
+| `ldb pup` | Powerup productivity stats |
+| `ldb pup 42` | Per-kill detail for powerup #42 |
+| `ldb pup list` | Recent powerup events |
+| `ldb pup icefall` | Per-mob breakdown for a zone |
 | `ldb zone` | Stats for current zone |
 | `ldb mob troll` | Search kills by mob name |
 | `ldb top mobs` | Leaderboard by kill count |
@@ -43,7 +47,7 @@ Most commands default to your **current tier and remort**. You can override this
 | `T1` | All remorts within tier 1 |
 | `R4` | Remort 4, current tier |
 
-Examples: `ldb this all`, `ldb level 50 T1 R5`, `ldb quest T2`, `ldb cp all`
+Examples: `ldb this all`, `ldb level 50 T1 R5`, `ldb quest T2`, `ldb cp all`, `ldb pup all`
 
 ---
 
@@ -61,6 +65,7 @@ Shows whether collection is on, database path, record counts, and current combat
   Deaths recorded: 1
   Quests recorded: 17
   Campaigns recorded: 21
+  Pup events recorded: 42
   Current level: 69
   Current zone: knossos
 ```
@@ -69,7 +74,7 @@ Shows whether collection is on, database path, record counts, and current combat
 
 Per-kill table for a level. Shows mob name, zone, XP gained, total damage dealt, combat rounds, and estimated mob level. Totals and averages at the bottom.
 
-At level 200+, these commands work with **powerup numbers** instead of levels (e.g., `ldb level 3` = powerup 3).
+At level 200+, these commands redirect to `ldb pup` (use `ldb pup` for powerup stats).
 
 ```
 > ldb level 68
@@ -87,6 +92,102 @@ At level 200+, these commands work with **powerup numbers** instead of levels (e
   --  --------------------  ---------  -----  ----  ---  ----
   Tot 24 kills                         2,764 78,430  82
   Avg                                    115  3,268  3.4
+```
+
+### `ldb pup [filter|zone]` — Powerup Productivity Stats
+
+Shows powerup summary and per-area productivity table for your current tier and remort (or filtered). This is the primary command for analyzing pupping efficiency.
+
+- `ldb pup` — current T+R overview
+- `ldb pup all` — all tiers and remorts
+- `ldb pup T1 R5` — specific tier and remort
+- `ldb pup list` — last 10 powerup events (shows IDs for drill-down)
+- `ldb pup list 20` — last 20 powerup events
+- `ldb pup icefall` — per-mob breakdown for a zone (substring match)
+- `ldb pup 42` — per-kill detail for powerup event #42
+
+**Overview output:**
+
+```
+> ldb pup
+
+[LevelDB] Powerup Summary (T2 R5):
+  Powerups: 8     Trains: 42 (5.3/pup)
+  Combat time: 1m 12s (9.0s/pup)
+
+  Area              Kills  AvgXP  AvgTime  Est/Pup  Trn/Hr
+  ----------------  -----  -----  -------  -------  ------
+  icefall              35    180    2.1s      11.7s    1631
+  fens                  5    199    3.0s      15.1s    1264
+  fortune               5    106    1.8s      17.0s    1124
+
+  Recent powerups:
+     ID  T/R    Pup#  Zone              Trains
+  -----  -----  -----  ----------------  ------
+     42  T2R5       8  icefall                7
+     41  T2R5       7  icefall                5
+     40  T2R5       6  icefall                5
+     39  T2R5       5  fens                   6
+     38  T2R5       4  icefall                5
+```
+
+Use `ldb pup 42` to see per-kill detail for a specific powerup, or `ldb pup list` to see more.
+
+Column guide:
+- **AvgXP**: Average XP earned per kill in this area
+- **AvgTime**: Average active combat time per kill
+- **Est/Pup**: Estimated active combat time to earn one powerup if grinding only in this area (`xp_per_level / AvgXP * AvgTime`)
+- **Trn/Hr**: Estimated trains per hour of active combat in this area
+
+**Per-kill detail (by pup event ID):**
+
+```
+> ldb pup 42
+
+[LevelDB] Powerup #42 (T2 R5, pup 8) - icefall:
+  #  Mob                       Zone      XP      Dmg  Rnd  MLvl  Time
+  -  ------------------------  --------  ------  ----  ---  ----  -----
+  1  a relaxed minotaur guard  icefall      118  3022    2   232  1.8s
+  2  a mountain troll          icefall      145  2871    2   228  1.5s
+  3  a frost giant             icefall      132  3544    3   235  2.3s
+  4  a mountain troll          icefall      148  2910    2   228  1.6s
+  5  a relaxed minotaur guard  icefall      122  3105    2   232  1.9s
+  -  ------------------------  --------  ------  ----  ---  ----  -----
+  Tot 5 kills                             665  15452   11         9.1s
+  Avg                                     133   3090  2.2        1.8s
+  Trains earned: 7
+  XP needed: 1,000
+```
+
+**Per-mob zone detail:**
+
+```
+> ldb pup icefall
+
+[LevelDB] Pup zone detail: icefall (T2 R5):
+  Mob                       Kills  AvgXP  AvgTime  AvgRd
+  ------------------------  -----  -----  -------  -----
+  a relaxed minotaur guard     14    120    1.9s    2.0
+  a mountain troll             12    146    1.6s    2.1
+  a frost giant                 9    135    2.4s    3.0
+```
+
+**Pup event list:**
+
+```
+> ldb pup list
+
+[LevelDB] Last 10 powerups (T2 R5):
+     ID  T/R    Pup#  Zone              Trains
+  -----  -----  -----  ----------------  ------
+     42  T2R5       8  icefall                7
+     41  T2R5       7  icefall                5
+     40  T2R5       6  icefall                5
+     39  T2R5       5  fens                   6
+     38  T2R5       4  icefall                5
+     37  T2R5       3  icefall                5
+     36  T2R5       2  fortune                6
+     35  T2R5       1  icefall                5
 ```
 
 ### `ldb zone [name]` — Zone Stats
@@ -166,32 +267,39 @@ Requires 3+ kills to rank (avoids one-off outliers).
 
 ### `ldb remort [R] [T<n>]` — Remort Bracket Summary
 
-Breaks a remort into level brackets (1-50, 51-100, 101-150, 151-200, Pups) with aggregate stats. Defaults to current tier + remort.
+Breaks a remort into level brackets (1-50, 51-100, 101-150, 151-200) with aggregate stats. If powerup data exists, a separate pup section is shown below with productivity stats and per-area breakdown. Defaults to current tier + remort.
 
 - `ldb remort` — current remort
 - `ldb remort 4` — remort 4, current tier
 - `ldb remort T1 R4` — tier 1, remort 4
 
-Column guide: **AvgGap** = average (mob level - player level), **Pups** = powerup count in that bracket.
+Column guide: **AvgGap** = average (mob level - player level).
 
 ```
 > ldb remort
 
 [LevelDB] Remort summary - T2 R5 (966 kills):
-  Bracket  Kills  AvgXP  AvgDmg  AvgGap  AvgRnd  Zones  Deaths  Pups
-  -------  -----  -----  ------  ------  ------  -----  ------  ----
+  Bracket  Kills  AvgXP  AvgDmg  AvgGap  AvgRnd  Zones  Deaths
+  -------  -----  -----  ------  ------  ------  -----  ------
   1-50       608    162   1,220    +4.6     1.8     75       -
   51-100     358    140   2,870    +4.4     3.0     41       -
   101-150      -      -       -       -       -      -       -
   151-200      -      -       -       -       -      -       -
-  Pups         -      -       -       -       -      -       -
-  -------  -----  -----  ------  ------  ------  -----  ------  ----
+  -------  -----  -----  ------  ------  ------  -----  ------
   Total      966    154   1,831    +4.5     2.2              -
+
+  Powerups: 8     Trains: 42 (5.3/pup)
+  Combat time: 1m 12s (9.0s/pup)
+
+  Area              Kills  AvgXP  AvgTime  Est/Pup  Trn/Hr
+  ----------------  -----  -----  -------  -------  ------
+  icefall              35    180    2.1s      11.7s    1631
+  fens                  5    199    3.0s      15.1s    1264
 ```
 
 ### `ldb tier [T]` — Tier Comparison
 
-Compares all remorts within a tier, one row per remort for each bracket. Useful for spotting trends across remorts.
+Compares all remorts within a tier, one row per remort for each bracket. A Powerups comparison section at the end shows pupping efficiency across remorts.
 
 ```
 > ldb tier 2
@@ -199,8 +307,8 @@ Compares all remorts within a tier, one row per remort for each bracket. Useful 
 [LevelDB] Tier summary - T2 (5 remorts, 10,934 kills):
 
   -- 1-50 --
-  Remort   Kills  AvgXP  AvgDmg  AvgGap  AvgRnd  Zones  Deaths  Pups
-  -------  -----  -----  ------  ------  ------  -----  ------  ----
+  Remort   Kills  AvgXP  AvgDmg  AvgGap  AvgRnd  Zones  Deaths
+  -------  -----  -----  ------  ------  ------  -----  ------
   R1         181     84     820    +3.8     1.4     22       -
   R2         385    104     980    +4.1     1.5     38       -
   R3         611    120   1,050    +4.3     1.6     52       -
@@ -208,11 +316,18 @@ Compares all remorts within a tier, one row per remort for each bracket. Useful 
   R5         608    162   1,220    +4.6     1.8     75       -
 
   -- 51-100 --
-  Remort   Kills  AvgXP  AvgDmg  AvgGap  AvgRnd  Zones  Deaths  Pups
-  -------  -----  -----  ------  ------  ------  -----  ------  ----
+  Remort   Kills  AvgXP  AvgDmg  AvgGap  AvgRnd  Zones  Deaths
+  -------  -----  -----  ------  ------  ------  -----  ------
   R1           -      -       -       -       -      -       -
   R2         290     98   1,520    +3.9     2.4     28       -
   ...
+
+  -- Powerups --
+  Remort  Pups  Trains  Trn/Pup  AvgTime  Trn/Hr
+  ------  ----  ------  -------  -------  ------
+  R2         3      15      5.0    12.3s    1463
+  R4         8      42      5.3     9.0s    2120
+  R5        22     121      5.5     8.1s    2444
 ```
 
 ### `ldb quest [filter]` — Quest History
@@ -276,19 +391,7 @@ Full detail for a single campaign by its database ID (the `#` column from `ldb c
   Mob list (15):
      1. Marie Antoinette (Diamond Soul Revelation)
      2. a Nulan'Boar tribesman (Plains of Nulan'Boar)
-     3. a fox pup (Plains of Nulan'Boar)
-     4. a Templar Patrol (Rosewood Castle)
-     5. a red ball (Rosewood Castle)
-     6. a drow emissary (The Goblin Fortress)
-     7. a grizzled goblin dressed in skins (The Goblin Fortress)
-     8. Fiznatch, a ratling pirate (The Grand City of Aylor)
-     9. a sinister vandal (The Three Pillars of Diatz)
-    10. Dumazzi (The Three Pillars of Diatz)
-    11. an agathinon aasimon (The Upper Planes)
-    12. Robirc the head surgeon (Tilule Rehabilitation Clinic)
-    13. a bugbear bandit (Tilule Rehabilitation Clinic)
-    14. a Chaprenulan lab assistant (Tilule Rehabilitation Clinic)
-    15. Earshda the receptionist (Tilule Rehabilitation Clinic)
+     ...
 ```
 
 ### `ldb deaths [N]` — Death Log
@@ -322,8 +425,9 @@ Shows the database file path, size, and record counts.
 
 ## How Data Is Collected
 
-- **Kills**: Tracked via GMCP enemy state changes. XP is calculated from TNL difference before and after each kill. Mob level is estimated from sacrifice gold (gold x 2). Damage and rounds are counted from combat text.
+- **Kills**: Tracked via GMCP enemy state changes. XP is calculated from TNL difference before and after each kill. Mob level is estimated from sacrifice gold (gold x 2). Damage and rounds are counted from combat text. Active combat time is measured per kill using `utils.timer()`.
 - **Deaths**: Captured from the "You have died" trigger.
+- **Powerups**: Detected automatically when GMCP `char.base.pups` increments. Trains earned are computed from the delta of `char.worth.trains` before and after the pup event.
 - **Quests**: Tracked automatically via GMCP `comm.quest` messages (start, complete, fail, timeout).
 - **Campaigns**: Tracked via text triggers for campaign start/complete/quit. Mob lists are captured by silently running `cp info`.
 
@@ -333,9 +437,11 @@ All records include your current level, tier, and remort at the time of the even
 
 ## Tips
 
+- Use `ldb pup` to compare pupping efficiency across different areas.
+- Use `ldb pup <zone>` to see which mobs in an area give the best XP.
 - Use `ldb this` during a grind session to see XP progress at your current level.
 - Use `ldb top xp 20` to find which mobs give the best XP on average.
-- Use `ldb remort` at the end of a remort to review your bracket performance.
+- Use `ldb remort` at the end of a remort to review your bracket performance and pupping stats.
 - Use `ldb tier` to compare how your current remort stacks up against previous ones.
 - Use `ldb cp show` after a campaign to review the mob list and rewards.
 - The `zone` and `mob` commands use **substring matching** — `ldb zone fen` matches "fens", `ldb mob troll` matches "a troll warrior".

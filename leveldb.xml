@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="6.0"
+   version="7.0"
    save_state="y"
    >
 
@@ -148,6 +148,13 @@
       script="ldb_campaign_show"
    ></alias>
    <alias
+      match="^ldb pup(?: (.+))?$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_pup"
+   ></alias>
+   <alias
       match="^ldb db$"
       enabled="y"
       regexp="y"
@@ -192,6 +199,18 @@
       keep_evaluating="y"
       omit_from_output="n"
       script="ldb_on_sacrifice"
+      sequence="100"
+   ></trigger>
+
+   <!-- Powerup detection trigger -->
+   <trigger
+      name="trg_ldb_powerup"
+      match="^Congratulations, .+\. You have increased your powerups to (\d+)\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_powerup"
       sequence="100"
    ></trigger>
 
@@ -401,6 +420,13 @@ local cached_zone = nil
 local cached_room_num = nil
 local cached_room_name = nil
 local cached_enemy = ""
+local cached_trains = nil    -- from char.worth
+
+-- =============================================================================
+-- Pup tracking state
+-- =============================================================================
+local prev_pups = nil        -- Previous pups value for change detection
+local pending_pup = nil      -- Pending pup event awaiting char.worth update
 
 -- =============================================================================
 -- Quest/Campaign tracking state
@@ -521,6 +547,17 @@ local function init_tables()
          mob_name     TEXT NOT NULL,
          area         TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS pup_events (
+         id           INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp    INTEGER NOT NULL,
+         tier         INTEGER NOT NULL,
+         remort       INTEGER NOT NULL,
+         pup_number   INTEGER NOT NULL,
+         zone         TEXT,
+         trains_earned INTEGER,
+         xp_per_level INTEGER
+      );
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_tables")
@@ -534,6 +571,8 @@ local function run_migrations()
    -- Migration: add expected_qp/expected_gold to campaigns (v6.0)
    db:exec("ALTER TABLE campaigns ADD COLUMN expected_qp INTEGER")
    db:exec("ALTER TABLE campaigns ADD COLUMN expected_gold INTEGER")
+   -- Migration: add combat_time column (v6.0 -> v7.0)
+   db:exec("ALTER TABLE kills ADD COLUMN combat_time REAL")
    -- Errors from "duplicate column name" are silently ignored
 end
 
@@ -558,6 +597,7 @@ local function init_indexes()
       CREATE INDEX IF NOT EXISTS idx_campaigns_tier ON campaigns(tier);
       CREATE INDEX IF NOT EXISTS idx_campaigns_remort ON campaigns(remort);
       CREATE INDEX IF NOT EXISTS idx_campaign_mobs_cid ON campaign_mobs(campaign_id);
+      CREATE INDEX IF NOT EXISTS idx_pup_events_tier_remort ON pup_events(tier, remort);
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_indexes")
@@ -624,6 +664,7 @@ local function start_fight(enemy_name)
       room_name = cached_room_name,
       enemy = enemy_name,
       pup = cached_pups,
+      start_time = utils.timer(),
    }
 end
 
@@ -648,10 +689,16 @@ local function record_kill()
       if xp_gained < 0 then xp_gained = 0 end
    end
 
+   local combat_time = nil
+   if fight_start.start_time then
+      combat_time = utils.timer() - fight_start.start_time
+      if combat_time < 0 then combat_time = nil end
+   end
+
    local query = string.format(
       "INSERT INTO kills (timestamp, mob_name, zone, room_num, room_name, level, " ..
-      "xp_gained, damage_total, rounds, tier, remort, pup, mob_level) " ..
-      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %s, %s, %s, %s)",
+      "xp_gained, damage_total, rounds, tier, remort, pup, mob_level, combat_time) " ..
+      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %s, %s, %s, %s, %s)",
       os.time(),
       fixsql(fight_start.enemy),
       fixsql(fight_start.zone),
@@ -664,7 +711,8 @@ local function record_kill()
       cached_tier and tostring(cached_tier) or "NULL",
       cached_remorts and tostring(cached_remorts) or "NULL",
       fight_start.pup and tostring(fight_start.pup) or "NULL",
-      sacrifice_mob_level and tostring(sacrifice_mob_level) or "NULL"
+      sacrifice_mob_level and tostring(sacrifice_mob_level) or "NULL",
+      combat_time and string.format("%.3f", combat_time) or "NULL"
    )
 
    db:exec(query)
@@ -694,6 +742,27 @@ local function record_death()
    dbcheck(db:errcode(), db:errmsg(), query)
 end
 
+local function record_pup_event(pup_data, trains_earned)
+   if not db then return end
+   if not enabled then return end
+
+   local query = string.format(
+      "INSERT INTO pup_events (timestamp, tier, remort, pup_number, zone, " ..
+      "trains_earned, xp_per_level) " ..
+      "VALUES (%d, %s, %s, %d, %s, %s, %s)",
+      pup_data.timestamp,
+      pup_data.tier and tostring(pup_data.tier) or "0",
+      pup_data.remort and tostring(pup_data.remort) or "0",
+      pup_data.pup_number,
+      fixsql(pup_data.zone),
+      trains_earned and tostring(trains_earned) or "NULL",
+      pup_data.xp_per_level and tostring(pup_data.xp_per_level) or "NULL"
+   )
+
+   db:exec(query)
+   dbcheck(db:errcode(), db:errmsg(), query)
+end
+
 local function end_combat()
    in_combat = false
    fight_start = nil
@@ -717,6 +786,26 @@ function OnPluginBroadcast(msg, id, name, text)
          if base.tier then cached_tier = tonumber(base.tier) end
          if base.remorts then cached_remorts = tonumber(base.remorts) end
          if base.pups then cached_pups = tonumber(base.pups) end
+
+         -- Detect pup event: pups increased (fallback if text trigger missed)
+         if cached_pups and prev_pups and cached_pups > prev_pups then
+            -- Only create pending_pup if text trigger hasn't already done so
+            if not pending_pup or pending_pup.pup_number ~= cached_pups then
+               if pending_pup then
+                  record_pup_event(pending_pup, nil)
+               end
+               pending_pup = {
+                  timestamp = os.time(),
+                  tier = cached_tier,
+                  remort = cached_remorts,
+                  pup_number = cached_pups,
+                  zone = cached_zone or "Unknown",
+                  xp_per_level = cached_perlevel,
+                  trains_before = cached_trains,
+               }
+            end
+         end
+         prev_pups = cached_pups
       end
 
    elseif text == "char.status" then
@@ -787,6 +876,26 @@ function OnPluginBroadcast(msg, id, name, text)
          cached_room_name = room.name
       end
 
+   elseif text == "char.worth" then
+      local worth = gmcp("char.worth")
+      if worth then
+         local new_trains = tonumber(worth.trains)
+
+         -- Finalize pending pup event if we have one
+         if pending_pup and new_trains then
+            local trains_earned = nil
+            if pending_pup.trains_before then
+               trains_earned = new_trains - pending_pup.trains_before
+               if trains_earned < 0 then trains_earned = nil end
+            end
+            record_pup_event(pending_pup, trains_earned)
+            pending_pup = nil
+         end
+
+         -- Update cached value AFTER delta computation
+         if new_trains then cached_trains = new_trains end
+      end
+
    elseif text == "comm.quest" then
       local quest_data = gmcp("comm.quest")
       if quest_data then
@@ -823,6 +932,35 @@ function ldb_on_sacrifice(name, line, wildcards)
    if gold then
       sacrifice_mob_level = gold * 2
    end
+end
+
+function ldb_on_powerup(name, line, wildcards)
+   if not enabled then return end
+
+   local pup_number = tonumber(wildcards[1])
+   if not pup_number then return end
+
+   -- Update cached pups
+   cached_pups = pup_number
+   prev_pups = pup_number
+
+   -- Snapshot trains before char.worth updates
+   local trains_before = cached_trains
+
+   -- Create pending_pup; will be finalized when char.worth arrives
+   -- If there's already a pending_pup (shouldn't happen), finalize it
+   if pending_pup then
+      record_pup_event(pending_pup, nil)
+   end
+   pending_pup = {
+      timestamp = os.time(),
+      tier = cached_tier,
+      remort = cached_remorts,
+      pup_number = pup_number,
+      zone = cached_zone or "Unknown",
+      xp_per_level = cached_perlevel,
+      trains_before = trains_before,
+   }
 end
 
 -- =============================================================================
@@ -1234,6 +1372,25 @@ local function format_abbreviated(n)
 end
 
 -- =============================================================================
+-- Helper: format time in seconds to human-readable
+-- =============================================================================
+local function format_time(seconds)
+   if not seconds then return "N/A" end
+   if seconds < 0 then return "N/A" end
+   if seconds < 60 then
+      return string.format("%.1fs", seconds)
+   elseif seconds < 3600 then
+      local m = math.floor(seconds / 60)
+      local s = seconds - m * 60
+      return string.format("%dm %ds", m, s)
+   else
+      local h = math.floor(seconds / 3600)
+      local m = math.floor((seconds - h * 3600) / 60)
+      return string.format("%dh %dm", h, m)
+   end
+end
+
+-- =============================================================================
 -- Helper: bracket label and SQL CASE expression for level brackets
 -- =============================================================================
 local BRACKETS = {
@@ -1241,7 +1398,6 @@ local BRACKETS = {
    {label = "51-100",  min = 51,  max = 100},
    {label = "101-150", min = 101, max = 150},
    {label = "151-200", min = 151, max = 200},
-   {label = "Pups",    min = 201, max = 201},
 }
 
 -- =============================================================================
@@ -1313,6 +1469,12 @@ function ldb_status(name, line, wildcards)
       end
       ColourNote("cyan", "", "  Quests recorded: " .. format_number(quest_count))
       ColourNote("cyan", "", "  Campaigns recorded: " .. format_number(campaign_count))
+
+      local pup_event_count = 0
+      for row in db:nrows("SELECT COUNT(*) as cnt FROM pup_events") do
+         pup_event_count = row.cnt
+      end
+      ColourNote("cyan", "", "  Pup events recorded: " .. format_number(pup_event_count))
    end
 
    if cached_level then
@@ -1342,9 +1504,11 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb help                - Show this help")
    ColourNote("cyan", "", "  ldb on / off            - Enable/disable data collection")
    ColourNote("cyan", "", "  ldb level [N] [filter]  - Kill breakdown for level N (default: current)")
-   ColourNote("cyan", "", "                            At 200+: N is powerup number")
-   ColourNote("cyan", "", "  ldb this [filter]       - Kill breakdown for current level/powerup")
-   ColourNote("cyan", "", "  ldb last [filter]       - Kill breakdown for previous level/powerup")
+   ColourNote("cyan", "", "  ldb this [filter]       - Kill breakdown for current level")
+   ColourNote("cyan", "", "  ldb last [filter]       - Kill breakdown for previous level")
+   ColourNote("cyan", "", "  ldb pup [filter|zone]   - Powerup productivity stats")
+   ColourNote("cyan", "", "  ldb pup <id>            - Per-kill detail for a specific powerup")
+   ColourNote("cyan", "", "  ldb pup list [N]        - Last N powerup events (default 10)")
    ColourNote("cyan", "", "  ldb zone [name]         - Stats for a zone (default: current)")
    ColourNote("cyan", "", "  ldb mob <name>          - Stats for a mob (substring match)")
    ColourNote("cyan", "", "  ldb top mobs [N]        - Top N mobs by kill count (default 10)")
@@ -1363,7 +1527,7 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
    ColourNote("cyan", "", "")
-   ColourNote("cyan", "", "  Filters (level/this/last): default = current tier & remort")
+   ColourNote("cyan", "", "  Filters: default = current tier & remort")
    ColourNote("cyan", "", "    all                   - All tiers and remorts (separate sections)")
    ColourNote("cyan", "", "    T1 R5                 - Specific tier and remort")
    ColourNote("cyan", "", "    T1                    - All remorts within a tier (separate sections)")
@@ -1394,20 +1558,16 @@ function ldb_level(name, line, wildcards)
    if not filter then return end
 
    if cached_level and cached_level >= 200 then
-      local pup = arg or cached_pups
-      if not pup then
-         ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
-         return
-      end
-      show_level_stats(cached_level, pup, filter)
-   else
-      local level = arg or cached_level
-      if not level then
-         ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
-         return
-      end
-      show_level_stats(level, nil, filter)
+      ColourNote("cyan", "", PREFIX .. "Use 'ldb pup' for powerup stats.")
+      return
    end
+
+   local level = arg or cached_level
+   if not level then
+      ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
+      return
+   end
+   show_level_stats(level, nil, filter)
 end
 
 -- =============================================================================
@@ -1422,14 +1582,10 @@ function ldb_thislevel(name, line, wildcards)
       return
    end
    if cached_level >= 200 then
-      if not cached_pups then
-         ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
-         return
-      end
-      show_level_stats(cached_level, cached_pups, filter)
-   else
-      show_level_stats(cached_level, nil, filter)
+      ColourNote("cyan", "", PREFIX .. "Use 'ldb pup' for powerup stats.")
+      return
    end
+   show_level_stats(cached_level, nil, filter)
 end
 
 -- =============================================================================
@@ -1444,39 +1600,462 @@ function ldb_lastlevel(name, line, wildcards)
       return
    end
    if cached_level >= 200 then
-      if not cached_pups then
-         ColourNote("red", "", PREFIX .. "Current powerup unknown. Try again after GMCP data arrives.")
-         return
+      ColourNote("cyan", "", PREFIX .. "Use 'ldb pup' for powerup stats.")
+      return
+   end
+   if cached_level <= 1 then
+      ColourNote("yellow", "", PREFIX .. "No previous level.")
+      return
+   end
+   show_level_stats(cached_level - 1, nil, filter)
+end
+
+-- =============================================================================
+-- Command: ldb pup [filter|id|zone]
+-- =============================================================================
+
+-- Helper: build pup WHERE clause from filter + tier/remort defaults
+local function pup_where(filter)
+   local tier = filter.tier or cached_tier
+   local remort = filter.remort or cached_remorts
+   if filter.all then
+      return "level >= 200", nil, nil
+   end
+   if not tier or not remort then return nil end
+   if filter.tier and not filter.remort then
+      -- Tier only: all remorts within tier
+      return string.format("level >= 200 AND tier = %d", tier), tier, nil
+   end
+   return string.format("level >= 200 AND tier = %d AND remort = %d", tier, remort), tier, remort
+end
+
+-- Helper: render per-area pup productivity table
+local function render_pup_area_table(kill_where, avg_trains, xp_per_level)
+   if not xp_per_level or xp_per_level <= 0 then xp_per_level = cached_perlevel or 1000 end
+
+   local area_query = string.format(
+      "SELECT zone, COUNT(*) as kills, AVG(xp_gained) as avg_xp, " ..
+      "AVG(combat_time) as avg_time " ..
+      "FROM kills WHERE %s " ..
+      "AND (mob_level IS NULL OR mob_level > 200) " ..
+      "GROUP BY zone ORDER BY kills DESC",
+      kill_where)
+
+   local areas = {}
+   for row in db:nrows(area_query) do
+      table.insert(areas, row)
+   end
+
+   if #areas == 0 then
+      ColourNote("yellow", "", "  No pup kills recorded.")
+      return
+   end
+
+   local fmt = "  %-16s  %5s  %5s  %7s  %7s  %6s"
+   ColourNote("cyan", "", string.format(fmt,
+      "Area", "Kills", "AvgXP", "AvgTime", "Est/Pup", "Trn/Hr"))
+   ColourNote("cyan", "", string.format(fmt,
+      "----------------", "-----", "-----", "-------", "-------", "------"))
+
+   for _, a in ipairs(areas) do
+      local avg_time_str = "N/A"
+      local est_pup_str = "N/A"
+      local trn_hr_str = "N/A"
+
+      if a.avg_time and a.avg_time > 0 then
+         avg_time_str = format_time(a.avg_time)
       end
-      if cached_pups <= 0 then
-         ColourNote("yellow", "", PREFIX .. "No previous powerup.")
-         return
+
+      if a.avg_xp and a.avg_xp > 0 and a.avg_time and a.avg_time > 0 then
+         local est_time_per_pup = (xp_per_level / a.avg_xp) * a.avg_time
+         est_pup_str = format_time(est_time_per_pup)
+         if avg_trains and est_time_per_pup > 0 then
+            trn_hr_str = tostring(math.floor(avg_trains / est_time_per_pup * 3600))
+         end
       end
-      show_level_stats(cached_level, cached_pups - 1, filter)
-   else
-      if cached_level <= 1 then
-         ColourNote("yellow", "", PREFIX .. "No previous level.")
-         return
-      end
-      show_level_stats(cached_level - 1, nil, filter)
+
+      local zone_display = a.zone
+      if #zone_display > 16 then zone_display = string.sub(zone_display, 1, 15) .. "+" end
+
+      ColourNote("white", "", string.format(fmt,
+         zone_display,
+         format_abbreviated(a.kills),
+         format_abbreviated(math.floor(a.avg_xp)),
+         avg_time_str,
+         est_pup_str,
+         trn_hr_str))
    end
 end
 
-function show_level_stats_section(level, pup, tier, remort, label)
+-- Helper: query and render pup summary + area table for a given pup/kill WHERE clause
+-- Returns pup_count, avg_trains, avg_xp_per_level for further use
+local function render_pup_section(pup_where_clause, kill_where)
+   local pup_count = 0
+   local total_trains = 0
+   local avg_trains = nil
+   local avg_xp_per_level = nil
+
+   for row in db:nrows(string.format(
+      "SELECT COUNT(*) as cnt, COALESCE(SUM(trains_earned), 0) as trains, " ..
+      "AVG(trains_earned) as avg_t, " ..
+      "AVG(xp_per_level) as avg_xpl " ..
+      "FROM pup_events WHERE %s", pup_where_clause)) do
+      pup_count = row.cnt
+      total_trains = row.trains
+      avg_trains = row.avg_t
+      avg_xp_per_level = row.avg_xpl
+   end
+
+   -- Check for pup kills (may exist without pup_events for historical data)
+   local pup_kills = 0
+   for row in db:nrows(string.format(
+      "SELECT COUNT(*) as cnt FROM kills WHERE %s " ..
+      "AND (mob_level IS NULL OR mob_level > 200)", kill_where)) do
+      pup_kills = row.cnt
+   end
+
+   if pup_count == 0 and pup_kills == 0 then
+      return pup_count, avg_trains, avg_xp_per_level
+   end
+
+   Note("")
+
+   if pup_count > 0 then
+      local avg_t_str = avg_trains and string.format("%.1f", avg_trains) or "N/A"
+      ColourNote("white", "", string.format(
+         "  Powerups: %d     Trains: %d (%s/pup)",
+         pup_count, total_trains, avg_t_str))
+
+      local total_combat_time = 0
+      for row in db:nrows(string.format(
+         "SELECT COALESCE(SUM(combat_time), 0) as t FROM kills WHERE %s " ..
+         "AND combat_time IS NOT NULL AND (mob_level IS NULL OR mob_level > 200)",
+         kill_where)) do
+         total_combat_time = row.t
+      end
+      local avg_time_per_pup = pup_count > 0 and total_combat_time / pup_count or 0
+      ColourNote("white", "", string.format(
+         "  Combat time: %s (%s/pup)",
+         format_time(total_combat_time),
+         format_time(avg_time_per_pup)))
+   else
+      ColourNote("yellow", "", "  Pup kills: " .. pup_kills ..
+         " (no pup events recorded; tracking started in v7.0)")
+   end
+
+   if pup_kills > 0 then
+      Note("")
+      local xp_per_level = avg_xp_per_level or cached_perlevel or 1000
+      render_pup_area_table(kill_where, avg_trains, xp_per_level)
+   end
+
+   return pup_count, avg_trains, avg_xp_per_level
+end
+
+-- Helper: render a list of pup event rows
+local function render_pup_list(pup_where_clause, limit)
+   local pups = {}
+   for row in db:nrows(string.format(
+      "SELECT id, timestamp, tier, remort, pup_number, zone, trains_earned " ..
+      "FROM pup_events WHERE %s ORDER BY id DESC LIMIT %d",
+      pup_where_clause, limit)) do
+      table.insert(pups, row)
+   end
+
+   if #pups == 0 then return end
+
+   local fmt = "  %5s  %-5s  %5s  %-16s  %6s"
+   ColourNote("cyan", "", string.format(fmt, "ID", "T/R", "Pup#", "Zone", "Trains"))
+   ColourNote("cyan", "", string.format(fmt, "-----", "-----", "-----", "----------------", "------"))
+
+   for _, p in ipairs(pups) do
+      local tr_label = string.format("T%dR%d", p.tier, p.remort)
+      local zone_display = p.zone or "?"
+      if #zone_display > 16 then zone_display = string.sub(zone_display, 1, 15) .. "+" end
+      local trains_str = p.trains_earned and tostring(p.trains_earned) or "N/A"
+      ColourNote("white", "", string.format(fmt,
+         tostring(p.id), tr_label, tostring(p.pup_number),
+         zone_display, trains_str))
+   end
+end
+
+-- Show pup overview for a filter (summary + per-area table)
+local function show_pup_overview(filter)
+   local kill_where, tier, remort = pup_where(filter)
+   if not kill_where then
+      ColourNote("red", "", PREFIX .. "Current tier/remort unknown. Try again after GMCP data arrives.")
+      return
+   end
+
+   -- Build label
+   local label
+   if filter.all then
+      label = "all"
+   elseif tier and not remort then
+      label = string.format("T%d", tier)
+   else
+      label = string.format("T%d R%d", tier or 0, remort or 0)
+   end
+
+   -- Build pup_events WHERE clause matching the kill_where scope
+   local pup_where_clause
+   if filter.all then
+      pup_where_clause = "1=1"
+   elseif tier and not remort then
+      pup_where_clause = string.format("tier = %d", tier)
+   else
+      pup_where_clause = string.format("tier = %d AND remort = %d", tier or 0, remort or 0)
+   end
+
+   ColourNote("cyan", "", PREFIX .. "Powerup Summary (" .. label .. "):")
+   render_pup_section(pup_where_clause, kill_where)
+
+   -- Last 5 pup events
+   Note("")
+   ColourNote("cyan", "", "  Recent powerups:")
+   render_pup_list(pup_where_clause, 5)
+end
+
+-- Show per-kill detail for a specific pup event by ID
+local function show_pup_detail(pup_id)
+   -- Look up this pup event
+   local pup_event = nil
+   for row in db:nrows(string.format(
+      "SELECT * FROM pup_events WHERE id = %d", pup_id)) do
+      pup_event = row
+   end
+
+   if not pup_event then
+      ColourNote("red", "", PREFIX .. "No pup event found with ID " .. pup_id .. ".")
+      return
+   end
+
+   -- Find previous pup event for same tier+remort to get time bounds
+   local prev_timestamp = 0
+   for row in db:nrows(string.format(
+      "SELECT MAX(timestamp) as ts FROM pup_events " ..
+      "WHERE tier = %d AND remort = %d AND id < %d",
+      pup_event.tier, pup_event.remort, pup_id)) do
+      if row.ts then prev_timestamp = row.ts end
+   end
+
+   -- Query kills between prev pup and this pup
+   local kills_query = string.format(
+      "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level, combat_time " ..
+      "FROM kills WHERE level >= 200 AND tier = %d AND remort = %d " ..
+      "AND timestamp > %d AND timestamp <= %d " ..
+      "AND (mob_level IS NULL OR mob_level > 200) " ..
+      "ORDER BY timestamp",
+      pup_event.tier, pup_event.remort, prev_timestamp, pup_event.timestamp)
+
+   local kills = {}
+   for row in db:nrows(kills_query) do
+      table.insert(kills, row)
+   end
+
+   -- Header
+   local label = string.format("T%d R%d, pup %d", pup_event.tier, pup_event.remort, pup_event.pup_number)
+   local zone_str = pup_event.zone and (" - " .. pup_event.zone) or ""
+   ColourNote("cyan", "", string.format("%sPowerup #%d (%s)%s:", PREFIX, pup_id, label, zone_str))
+
+   if #kills == 0 then
+      ColourNote("yellow", "", "  No kills found for this powerup.")
+   else
+      -- Calculate column widths
+      local max_mob = 3
+      local max_zone = 4
+      for _, k in ipairs(kills) do
+         if #k.mob_name > max_mob then max_mob = #k.mob_name end
+         if #k.zone > max_zone then max_zone = #k.zone end
+      end
+      if max_mob > 24 then max_mob = 24 end
+      if max_zone > 16 then max_zone = 16 end
+
+      local num_w = #tostring(#kills)
+      if num_w < 1 then num_w = 1 end
+
+      local function trunc(s, w)
+         if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
+      end
+
+      local hdr = string.format(
+         "  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s  %5s",
+         "#", "Mob", "Zone", "XP", "Dmg", "Rnd", "MLvl", "Time")
+      ColourNote("cyan", "", hdr)
+      local sep = "  " .. string.rep("-", num_w) .. "  " .. string.rep("-", max_mob) .. "  " ..
+         string.rep("-", max_zone) .. "  " .. string.rep("-", 7) .. "  " ..
+         string.rep("-", 5) .. "  " .. string.rep("-", 3) .. "  " .. string.rep("-", 4) ..
+         "  " .. string.rep("-", 5)
+      ColourNote("cyan", "", sep)
+
+      local total_xp = 0
+      local total_damage = 0
+      local total_rounds = 0
+      local total_time = 0
+      local time_count = 0
+
+      for i, k in ipairs(kills) do
+         total_xp = total_xp + k.xp_gained
+         total_damage = total_damage + k.damage_total
+         total_rounds = total_rounds + k.rounds
+         if k.combat_time then
+            total_time = total_time + k.combat_time
+            time_count = time_count + 1
+         end
+
+         local mlvl_str = k.mob_level and tostring(k.mob_level) or "-"
+         local time_str = k.combat_time and format_time(k.combat_time) or "N/A"
+         ColourNote("white", "", string.format(
+            "  %-" .. num_w .. "d  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s  %5s",
+            i, trunc(k.mob_name, max_mob), trunc(k.zone, max_zone),
+            format_number(k.xp_gained), format_number(k.damage_total),
+            k.rounds, mlvl_str, time_str))
+      end
+
+      ColourNote("cyan", "", sep)
+
+      local footer_label_w = num_w + 2 + max_mob
+      local time_total_str = time_count > 0 and format_time(total_time) or "N/A"
+      ColourNote("white", "", string.format(
+         "  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s  %5s",
+         string.format("Tot %d kills", #kills), "",
+         format_number(total_xp), format_number(total_damage),
+         total_rounds, "", time_total_str))
+
+      local avg_xp = math.floor(total_xp / #kills)
+      local avg_dmg = math.floor(total_damage / #kills)
+      local avg_rnd = string.format("%.1f", total_rounds / #kills)
+      local avg_time_str = time_count > 0 and format_time(total_time / time_count) or "N/A"
+      ColourNote("white", "", string.format(
+         "  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s  %5s",
+         "Avg", "", format_number(avg_xp), format_number(avg_dmg),
+         avg_rnd, "", avg_time_str))
+   end
+
+   -- Reward summary
+   if pup_event.trains_earned then
+      ColourNote("white", "", "  Trains earned: " .. pup_event.trains_earned)
+   end
+   if pup_event.xp_per_level then
+      ColourNote("white", "", "  XP needed: " .. format_number(pup_event.xp_per_level))
+   end
+end
+
+-- Show per-mob detail for a zone during pup leveling
+local function show_pup_zone_detail(zone_search)
+   local tier = cached_tier
+   local remort = cached_remorts
+   if not tier or not remort then
+      ColourNote("red", "", PREFIX .. "Current tier/remort unknown. Try again after GMCP data arrives.")
+      return
+   end
+
+   local zone_pattern = "%" .. zone_search .. "%"
+   local query = string.format(
+      "SELECT mob_name, COUNT(*) as cnt, AVG(xp_gained) as avg_xp, " ..
+      "AVG(combat_time) as avg_time, AVG(rounds) as avg_rnd " ..
+      "FROM kills WHERE level >= 200 AND tier = %d AND remort = %d " ..
+      "AND zone LIKE %s " ..
+      "AND (mob_level IS NULL OR mob_level > 200) " ..
+      "GROUP BY mob_name ORDER BY cnt DESC",
+      tier, remort, fixsql(zone_pattern))
+
+   local mobs = {}
+   for row in db:nrows(query) do
+      table.insert(mobs, row)
+   end
+
+   -- Find actual zone name from first kill
+   local actual_zone = zone_search
+   for row in db:nrows(string.format(
+      "SELECT zone FROM kills WHERE level >= 200 AND tier = %d AND remort = %d " ..
+      "AND zone LIKE %s LIMIT 1", tier, remort, fixsql(zone_pattern))) do
+      actual_zone = row.zone
+   end
+
+   local label = string.format("T%d R%d", tier, remort)
+   ColourNote("cyan", "", string.format("%sPup zone detail: %s (%s):", PREFIX, actual_zone, label))
+
+   if #mobs == 0 then
+      ColourNote("yellow", "", "  No pup kills found in this zone.")
+      return
+   end
+
+   local fmt = "  %-24s  %5s  %5s  %7s  %5s"
+   ColourNote("cyan", "", string.format(fmt, "Mob", "Kills", "AvgXP", "AvgTime", "AvgRd"))
+   ColourNote("cyan", "", string.format(fmt, "------------------------", "-----", "-----", "-------", "-----"))
+
+   for _, m in ipairs(mobs) do
+      local mob_display = m.mob_name
+      if #mob_display > 24 then mob_display = string.sub(mob_display, 1, 23) .. "+" end
+      local avg_time_str = m.avg_time and format_time(m.avg_time) or "N/A"
+      ColourNote("white", "", string.format(fmt,
+         mob_display,
+         tostring(m.cnt),
+         format_abbreviated(math.floor(m.avg_xp)),
+         avg_time_str,
+         m.avg_rnd and string.format("%.1f", m.avg_rnd) or "-"))
+   end
+end
+
+-- Main ldb pup command handler
+function ldb_pup(name, line, wildcards)
+   if not require_db() then return end
+   local arg = wildcards[1]
+
+   -- No argument: show overview for current T+R
+   if not arg or arg == "" then
+      show_pup_overview({})
+      return
+   end
+
+   local s = string.match(arg, "^%s*(.-)%s*$")  -- trim
+   local sl = string.lower(s)
+
+   -- "list" or "list N": show recent pup events
+   local list_n = string.match(sl, "^list%s*(%d*)$")
+   if list_n ~= nil then
+      local n = tonumber(list_n) or 10
+      local tier = cached_tier
+      local remort = cached_remorts
+      if not tier or not remort then
+         ColourNote("red", "", PREFIX .. "Current tier/remort unknown. Try again after GMCP data arrives.")
+         return
+      end
+      local pup_where_clause = string.format("tier = %d AND remort = %d", tier, remort)
+      ColourNote("cyan", "", string.format("%sLast %d powerups (T%d R%d):", PREFIX, n, tier, remort))
+      render_pup_list(pup_where_clause, n)
+      return
+   end
+
+   -- Numeric: show pup detail by ID
+   local num = tonumber(s)
+   if num then
+      show_pup_detail(num)
+      return
+   end
+
+   -- Try to parse as filter (all, T1, R3, T1R3, etc.)
+   if sl == "all" or string.match(sl, "^[tr]%d") then
+      local filter = parse_filter(arg)
+      if filter then
+         show_pup_overview(filter)
+      end
+      return
+   end
+
+   -- Otherwise treat as zone substring
+   show_pup_zone_detail(s)
+end
+
+function show_level_stats_section(level, tier, remort, label)
    -- Build WHERE clause
    local where = string.format("level = %d", level)
-   if pup then where = where .. string.format(" AND pup = %d", pup) end
    if tier then where = where .. string.format(" AND tier = %d", tier) end
    if remort then where = where .. string.format(" AND remort = %d", remort) end
 
    -- Header
-   local header
-   if pup then
-      header = PREFIX .. "Powerup " .. pup .. " kills " .. label .. ":"
-   else
-      header = PREFIX .. "Level " .. level .. " kills " .. label .. ":"
-   end
-   ColourNote("cyan", "", header)
+   ColourNote("cyan", "", PREFIX .. "Level " .. level .. " kills " .. label .. ":")
 
    -- Fetch kills
    local kills_query = "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level " ..
@@ -1495,7 +2074,7 @@ function show_level_stats_section(level, pup, tier, remort, label)
       total_deaths = row.cnt
    end
 
-   local no_kills_msg = pup and "  No kills recorded for this powerup." or "  No kills recorded at this level."
+   local no_kills_msg = "  No kills recorded at this level."
    if #kills == 0 then
       ColourNote("yellow", "", no_kills_msg)
       if total_deaths > 0 then
@@ -1573,7 +2152,7 @@ function show_level_stats_section(level, pup, tier, remort, label)
    end
 end
 
-function show_level_stats(level, pup, filter)
+function show_level_stats(level, _, filter)
    filter = filter or {}
 
    -- Determine if this is a multi-section or single-section query
@@ -1582,7 +2161,6 @@ function show_level_stats(level, pup, filter)
    if multi_section then
       -- Build WHERE for combo discovery (exclude NULLs)
       local where = string.format("level = %d AND tier IS NOT NULL AND remort IS NOT NULL", level)
-      if pup then where = where .. string.format(" AND pup = %d", pup) end
       if filter.tier then where = where .. string.format(" AND tier = %d", filter.tier) end
 
       local combos = {}
@@ -1592,22 +2170,15 @@ function show_level_stats(level, pup, filter)
       end
 
       if #combos == 0 then
-         local header
-         if pup then
-            header = PREFIX .. "Powerup " .. pup .. " kills:"
-         else
-            header = PREFIX .. "Level " .. level .. " kills:"
-         end
-         ColourNote("cyan", "", header)
-         local no_kills_msg = pup and "  No kills recorded for this powerup." or "  No kills recorded at this level."
-         ColourNote("yellow", "", no_kills_msg)
+         ColourNote("cyan", "", PREFIX .. "Level " .. level .. " kills:")
+         ColourNote("yellow", "", "  No kills recorded at this level.")
          return
       end
 
       for i, combo in ipairs(combos) do
          if i > 1 then Note("") end
          local label = "(T" .. combo.tier .. " R" .. combo.remort .. ")"
-         show_level_stats_section(level, pup, combo.tier, combo.remort, label)
+         show_level_stats_section(level, combo.tier, combo.remort, label)
       end
    else
       -- Single section: resolve tier and remort
@@ -1624,7 +2195,7 @@ function show_level_stats(level, pup, filter)
       end
 
       local label = "(T" .. tier .. " R" .. remort .. ")"
-      show_level_stats_section(level, pup, tier, remort, label)
+      show_level_stats_section(level, tier, remort, label)
    end
 end
 
@@ -1689,14 +2260,9 @@ local function query_bracket_stats(tier, remort)
    local grand_deaths = 0
 
    for _, br in ipairs(BRACKETS) do
-      local is_pups = (br.min == 201)
       local where_k = string.format(
          "tier = %d AND remort = %d AND level >= %d AND level <= %d",
          tier, remort, br.min, br.max)
-      -- For Pups bracket, exclude low-level mob kills (goal completions etc.)
-      if is_pups then
-         where_k = where_k .. " AND (mob_level IS NULL OR mob_level > 200)"
-      end
       local where_d = string.format(
          "tier = %d AND remort = %d AND level >= %d AND level <= %d",
          tier, remort, br.min, br.max)
@@ -1704,7 +2270,7 @@ local function query_bracket_stats(tier, remort)
       local row_data = {
          label = br.label,
          kills = 0, avg_xp = 0, avg_dmg = 0, avg_gap = nil,
-         avg_rnd = 0, zones = 0, deaths = 0, pup_count = 0,
+         avg_rnd = 0, zones = 0, deaths = 0,
       }
 
       for row in db:nrows(
@@ -1723,16 +2289,6 @@ local function query_bracket_stats(tier, remort)
          row_data.zones = row.zones
       end
 
-      -- Pup count (only meaningful for Pups bracket)
-      if is_pups then
-         for row in db:nrows(string.format(
-            "SELECT COUNT(DISTINCT pup) as cnt FROM kills WHERE " ..
-            "tier = %d AND remort = %d AND level >= 201 AND pup IS NOT NULL",
-            tier, remort)) do
-            row_data.pup_count = row.cnt
-         end
-      end
-
       for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. where_d) do
          row_data.deaths = row.cnt
       end
@@ -1749,12 +2305,12 @@ end
 -- Helper: render bracket table (used by both ldb remort and ldb tier)
 -- =============================================================================
 local function render_bracket_table(rows, show_header)
-   local fmt =  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s  %4s"
+   local fmt =  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s"
    if show_header then
       ColourNote("cyan", "", string.format(fmt,
-         "Bracket", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths", "Pups"))
+         "Bracket", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
       ColourNote("cyan", "", string.format(fmt,
-         "-------", "-----", "-----", "------", "------", "------", "-----", "------", "----"))
+         "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
    end
 
    local grand_kills = 0
@@ -1769,12 +2325,10 @@ local function render_bracket_table(rows, show_header)
       grand_kills = grand_kills + r.kills
       grand_deaths = grand_deaths + r.deaths
 
-      local pup_str = (r.pup_count and r.pup_count > 0) and tostring(r.pup_count) or ""
-
       if r.kills == 0 then
          ColourNote("white", "", string.format(fmt,
             r.label, "-", "-", "-", "-", "-", "-",
-            r.deaths > 0 and tostring(r.deaths) or "-", pup_str))
+            r.deaths > 0 and tostring(r.deaths) or "-"))
       else
          grand_xp_sum = grand_xp_sum + (r.avg_xp * r.kills)
          grand_dmg_sum = grand_dmg_sum + (r.avg_dmg * r.kills)
@@ -1797,14 +2351,13 @@ local function render_bracket_table(rows, show_header)
             gap_str,
             string.format("%.1f", r.avg_rnd),
             r.zones,
-            r.deaths > 0 and tostring(r.deaths) or "-",
-            pup_str))
+            r.deaths > 0 and tostring(r.deaths) or "-"))
       end
    end
 
    -- Total row
    ColourNote("cyan", "", string.format(fmt,
-      "-------", "-----", "-----", "------", "------", "------", "-----", "------", "----"))
+      "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
 
    local tot_avg_xp = grand_kills > 0 and format_abbreviated(math.floor(grand_xp_sum / grand_kills)) or "-"
    local tot_avg_dmg = grand_kills > 0 and format_abbreviated(math.floor(grand_dmg_sum / grand_kills)) or "-"
@@ -1819,8 +2372,7 @@ local function render_bracket_table(rows, show_header)
       tot_avg_gap,
       tot_avg_rnd,
       "",
-      grand_deaths > 0 and tostring(grand_deaths) or "-",
-      ""))
+      grand_deaths > 0 and tostring(grand_deaths) or "-"))
 end
 
 -- =============================================================================
@@ -1858,6 +2410,12 @@ function ldb_remort(name, line, wildcards)
    end
 
    render_bracket_table(results, true)
+
+   -- Pup section
+   local pup_where_clause = string.format("tier = %d AND remort = %d", tier, remort)
+   local kill_where = string.format("level >= 200 AND tier = %d AND remort = %d", tier, remort)
+   -- render_pup_section prints nothing if no pup data exists
+   local pc = render_pup_section(pup_where_clause, kill_where)
 end
 
 -- =============================================================================
@@ -1914,7 +2472,7 @@ function ldb_tier(name, line, wildcards)
    end
 
    -- For each bracket, show a section with one row per remort
-   local tier_fmt = "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s  %4s"
+   local tier_fmt = "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s"
    for bi, br in ipairs(BRACKETS) do
       if bi > 1 then Note("") end
 
@@ -1927,7 +2485,7 @@ function ldb_tier(name, line, wildcards)
             label = "R" .. rm,
             kills = r.kills, avg_xp = r.avg_xp, avg_dmg = r.avg_dmg,
             avg_gap = r.avg_gap, avg_rnd = r.avg_rnd, zones = r.zones,
-            deaths = r.deaths, pup_count = r.pup_count,
+            deaths = r.deaths,
          }
          if row_data.kills > 0 or row_data.deaths > 0 then
             bracket_has_data = true
@@ -1940,17 +2498,15 @@ function ldb_tier(name, line, wildcards)
          ColourNote("yellow", "", "    No data.")
       else
          ColourNote("cyan", "", string.format(tier_fmt,
-            "Remort", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths", "Pups"))
+            "Remort", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
          ColourNote("cyan", "", string.format(tier_fmt,
-            "-------", "-----", "-----", "------", "------", "------", "-----", "------", "----"))
+            "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
 
          for _, r in ipairs(bracket_rows) do
-            local pup_str = (r.pup_count and r.pup_count > 0) and tostring(r.pup_count) or ""
-
             if r.kills == 0 then
                ColourNote("white", "", string.format(tier_fmt,
                   r.label, "-", "-", "-", "-", "-", "-",
-                  r.deaths > 0 and tostring(r.deaths) or "-", pup_str))
+                  r.deaths > 0 and tostring(r.deaths) or "-"))
             else
                local gap_str = "-"
                if r.avg_gap then
@@ -1965,9 +2521,68 @@ function ldb_tier(name, line, wildcards)
                   gap_str,
                   string.format("%.1f", r.avg_rnd),
                   r.zones,
-                  r.deaths > 0 and tostring(r.deaths) or "-",
-                  pup_str))
+                  r.deaths > 0 and tostring(r.deaths) or "-"))
             end
+         end
+      end
+   end
+
+   -- Powerups comparison section
+   local pup_fmt = "  %-7s  %4s  %6s  %7s  %7s  %6s"
+   local pup_has_data = false
+   local pup_rows = {}
+   for _, rm in ipairs(remorts) do
+      local pup_row = {label = "R" .. rm, pups = 0, trains = 0,
+         trn_pup = nil, avg_time = nil, trn_hr = nil}
+
+      for row in db:nrows(string.format(
+         "SELECT COUNT(*) as cnt, COALESCE(SUM(trains_earned), 0) as trains, " ..
+         "AVG(trains_earned) as avg_t " ..
+         "FROM pup_events WHERE tier = %d AND remort = %d", tier, rm)) do
+         pup_row.pups = row.cnt
+         pup_row.trains = row.trains
+         pup_row.trn_pup = row.avg_t
+      end
+
+      if pup_row.pups > 0 then
+         pup_has_data = true
+         -- Get avg combat time per pup
+         local total_combat_time = 0
+         for row in db:nrows(string.format(
+            "SELECT COALESCE(SUM(combat_time), 0) as t FROM kills WHERE level >= 200 " ..
+            "AND tier = %d AND remort = %d AND combat_time IS NOT NULL " ..
+            "AND (mob_level IS NULL OR mob_level > 200)", tier, rm)) do
+            total_combat_time = row.t
+         end
+         pup_row.avg_time = total_combat_time / pup_row.pups
+         if pup_row.trn_pup and pup_row.avg_time > 0 then
+            pup_row.trn_hr = math.floor(pup_row.trn_pup / pup_row.avg_time * 3600)
+         end
+      end
+
+      table.insert(pup_rows, pup_row)
+   end
+
+   if pup_has_data then
+      Note("")
+      ColourNote("cyan", "", "  -- Powerups --")
+      ColourNote("cyan", "", string.format(pup_fmt,
+         "Remort", "Pups", "Trains", "Trn/Pup", "AvgTime", "Trn/Hr"))
+      ColourNote("cyan", "", string.format(pup_fmt,
+         "------", "----", "------", "-------", "-------", "------"))
+
+      for _, r in ipairs(pup_rows) do
+         if r.pups == 0 then
+            ColourNote("white", "", string.format(pup_fmt,
+               r.label, "-", "-", "-", "-", "-"))
+         else
+            ColourNote("white", "", string.format(pup_fmt,
+               r.label,
+               tostring(r.pups),
+               tostring(r.trains),
+               r.trn_pup and string.format("%.1f", r.trn_pup) or "N/A",
+               format_time(r.avg_time),
+               r.trn_hr and tostring(r.trn_hr) or "N/A"))
          end
       end
    end
@@ -2648,6 +3263,12 @@ function OnPluginInstall()
       if base.remorts then cached_remorts = tonumber(base.remorts) end
       if base.pups then cached_pups = tonumber(base.pups) end
    end
+   prev_pups = cached_pups  -- Prevent false pup detection on reload
+
+   local worth = gmcp("char.worth")
+   if worth then
+      if worth.trains then cached_trains = tonumber(worth.trains) end
+   end
 
    local status = gmcp("char.status")
    if status then
@@ -2704,6 +3325,7 @@ function OnPluginDisconnect()
    if in_combat then
       end_combat()
    end
+   pending_pup = nil
 end
 ]]>
 </script>

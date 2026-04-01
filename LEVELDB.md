@@ -1,36 +1,38 @@
 ================================================================================
 LEVELDB PLUGIN - IMPLEMENTATION GUIDE
 ================================================================================
-Last Updated: 2026-03-26
+Last Updated: 2026-04-01
 Plugin File: leveldb.xml
 Plugin ID: b34c04e52c6c7bced4508230
 Author: Rodarvus
-Current Version: 6.0
+Current Version: 7.0
 
 ================================================================================
 OVERVIEW
 ================================================================================
 LevelDB is a standalone MUSHclient plugin for Aardwolf MUD that records combat,
-quest, and campaign data in a persistent SQLite database. It tracks mob kills,
-XP gains, mob level estimates, damage dealt, rounds fought, deaths, quest
-completions, and campaign results across the character's entire leveling journey.
+quest, campaign, and powerup data in a persistent SQLite database. It tracks mob
+kills, XP gains, mob level estimates, damage dealt, rounds fought, combat time,
+deaths, quest completions, campaign results, and powerup (pup) events across the
+character's entire leveling journey.
 
 Key Features:
-- Per-kill records: mob name, zone, room, level, XP, mob level, damage, rounds
+- Per-kill records: mob name, zone, room, level, XP, mob level, damage, rounds,
+  combat time
 - Per-death records: mob, zone, room, level, tier, remort
 - Quest tracking: target, area, room, timer, result, rewards (QP/gold/TP/trains/pracs)
 - Campaign tracking: mob list, result, rewards, expected rewards from cp info
+- Powerup tracking: pup events with trains earned, per-area productivity stats
 - Tier and remort tracked as columns in every record
-- Tier/remort filtering: level/this/last/quest/cp commands default to current
+- Tier/remort filtering: level/this/last/pup/quest/cp commands default to current
   tier+remort, with optional filters (all, T1 R5, R4, T1)
-- Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200, Pups) with
-  avg XP, damage, level gap, rounds, zones, deaths, and pup count
-- Tier summary: compare remorts within a tier, organized by bracket sections
-- Powerup support: at level 200+ (Hero/Superhero), queries auto-adapt to segment
-  by powerup number instead of level. Pups bracket filters out low-level mob kills
-  (area goal completions) and shows power-up count.
+- Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200) with
+  avg XP, damage, level gap, rounds, zones, deaths. Separate powerup section
+  with trains, combat time, and per-area productivity.
+- Tier summary: compare remorts within a tier, with powerup comparison table
 - Single database file (leveldb.db) for all data
-- Rich query commands: per-level, per-zone, per-mob breakdowns, top-N rankings
+- Rich query commands: per-level, per-zone, per-mob breakdowns, top-N rankings,
+  powerup productivity analysis
 - GMCP state restored on plugin reload (no stale cache after mid-session reload)
 
 ================================================================================
@@ -38,7 +40,7 @@ COMMANDS
 ================================================================================
 
 BASIC:
-  ldb                     - Show status (enabled, DB path, kill/death/quest/campaign counts)
+  ldb                     - Show status (enabled, DB path, record counts)
   ldb help                - Show all commands
   ldb on                  - Enable data collection
   ldb off                 - Disable data collection
@@ -46,26 +48,31 @@ BASIC:
 QUERIES (COMBAT):
   ldb level [N] [filter]  - Kill breakdown for level N (default: current level)
                             Tabular per-kill listing with totals and averages
-                            At level 200+: N is a powerup number (default: current pup)
-  ldb this [filter]       - Shortcut for current level (or current powerup at 200+)
-  ldb last [filter]       - Shortcut for previous level (or previous powerup at 200+)
+                            At level 200+: redirects to ldb pup
+  ldb this [filter]       - Shortcut for current level (redirects to ldb pup at 200+)
+  ldb last [filter]       - Shortcut for previous level (redirects to ldb pup at 200+)
 
-  Filter options (level/this/last commands):
+  Filter options:
     (default)             - Current tier and remort only
     all                   - All tiers and remorts (separate sections)
     T1 R5                 - Specific tier and remort
     T1                    - All remorts within a tier (separate sections)
     R4                    - Specific remort, current tier
 
+QUERIES (POWERUPS):
+  ldb pup [filter|zone]   - Powerup productivity stats (summary + per-area table)
+                            Default: current tier & remort.
+                            Filter: all, T1 R5, T1, R4
+                            Zone: substring match for per-mob detail
+  ldb pup <id>            - Per-kill detail for a specific powerup event by ID
+  ldb pup list [N]        - Last N powerup events (default 10)
+
   ldb remort [R] [T<n>]   - Bracket summary for one remort (1-50, 51-100,
-                            101-150, 151-200, Pups). Shows kills, avg XP,
-                            avg damage, avg level gap, avg rounds, zones,
-                            deaths per bracket. Default: current tier & remort.
-                            ldb remort 4 = R4 current tier
-                            ldb remort T1 R4 = specific tier and remort
-  ldb tier [T]             - Compare remorts within a tier. Shows bracket
-                            sections (1-50, 51-100, etc.), each with one row
-                            per remort for side-by-side comparison.
+                            101-150, 151-200). Separate powerup section below
+                            with trains, combat time, and per-area table.
+                            Default: current tier & remort.
+  ldb tier [T]             - Compare remorts within a tier. Bracket sections
+                            followed by Powerups comparison table.
                             Default: current tier. ldb tier 1 = tier 1.
 
   ldb zone [name]         - Stats for a zone (default: current zone)
@@ -129,6 +136,17 @@ Schema:
     remort       INTEGER               -- char.base.remorts (nullable)
     pup          INTEGER               -- char.base.pups (nullable; set at 200+)
     mob_level    INTEGER               -- estimated from sacrifice gold * 2 (nullable)
+    combat_time  REAL                  -- seconds of active combat (utils.timer() delta, nullable)
+
+  pup_events:
+    id           INTEGER PRIMARY KEY AUTOINCREMENT  -- sequential, used as pup ID
+    timestamp    INTEGER NOT NULL      -- os.time() when powerup occurred
+    tier         INTEGER NOT NULL       -- char.base.tier
+    remort       INTEGER NOT NULL       -- char.base.remorts
+    pup_number   INTEGER NOT NULL       -- powerup count after this event
+    zone         TEXT                   -- zone where powerup occurred (nullable)
+    trains_earned INTEGER              -- trains awarded for this powerup (nullable)
+    xp_per_level INTEGER               -- char.base.perlevel at time of pup (nullable)
 
   deaths:
     id           INTEGER PRIMARY KEY AUTOINCREMENT
@@ -189,6 +207,7 @@ Indexes:
   idx_quests_level, idx_quests_tier, idx_quests_remort
   idx_campaigns_level, idx_campaigns_tier, idx_campaigns_remort
   idx_campaign_mobs_cid
+  idx_pup_events_tier_remort
 
 Design Decisions:
 - xp_gained = 0 is valid (mobs that yield no XP, fled/interrupted combats).
@@ -205,6 +224,14 @@ Design Decisions:
 - tier and remort are nullable because char.base may not have arrived yet.
 - pup is nullable: NULL for levels 1-199, populated from char.base.pups at 200+.
   Old records from v2.0 databases have pup=NULL (added via ALTER TABLE migration).
+- combat_time is measured using utils.timer() for sub-second precision. Nullable:
+  NULL for historical kills recorded before v7.0 (added via ALTER TABLE migration).
+- pup_events.trains_earned is nullable: NULL if char.worth data was not available
+  when the pup event fired (e.g., GMCP ordering edge case, stale pending_pup).
+  Practices are not earned from powerups; only trains are tracked.
+- pup_events.id is sequential and used as the public pup identifier in ldb pup <id>.
+  Kills for a specific pup are found by querying kills between consecutive
+  pup_events timestamps (same tier+remort).
 - Quest result is NULL while active, set on completion/failure/timeout. "unknown"
   is set when a quest is force-closed (new quest starts while old one has no result,
   or reconnect finds no active quest).
@@ -224,7 +251,7 @@ Transitions:
 
   1. IDLE --> COMBAT:
      When: char.status.enemy becomes non-empty
-     Action: Snapshot fight_start (tnl, level, zone, room, enemy, pup)
+     Action: Snapshot fight_start (tnl, level, zone, room, enemy, pup, start_time)
              Reset damage_total, round_count, last_enemypct, death_flag,
              sacrifice_mob_level.
 
@@ -263,8 +290,9 @@ death_flag Lifecycle:
 Kill Recording:
   record_kill() is called synchronously BEFORE end_combat() or start_fight().
   It reads fight_start, combat accumulators (damage_total, round_count), and
-  sacrifice_mob_level directly from module-level state, computes XP gained,
-  and INSERTs the kill record into the database.
+  sacrifice_mob_level directly from module-level state, computes XP gained
+  and combat_time (utils.timer() - fight_start.start_time), and INSERTs the
+  kill record into the database.
 
   The sacrifice text trigger fires on the sacrifice line, which arrives from the
   server before the GMCP char.status broadcast. So sacrifice_mob_level is already
@@ -445,13 +473,51 @@ Why cp info Instead of cp check:
   (level taken, expected QP, expected gold) that cp check does not.
 
 ================================================================================
+POWERUP (PUP) TRACKING
+================================================================================
+
+Pup Detection:
+  Primary: text trigger matches "Congratulations, X. You have increased your
+  powerups to N." This fires reliably for every pup. The handler creates a
+  pending_pup record with the current state snapshot: timestamp, tier, remort,
+  pup_number, zone, xp_per_level, and trains_before.
+
+  Fallback: char.base GMCP broadcast with increased pups value. Only creates
+  pending_pup if the text trigger hasn't already handled this pup number.
+
+  If a stale pending_pup exists when a new pup is detected (char.worth never
+  arrived for the previous pup), the stale one is finalized with NULL trains.
+
+Train Delta Computation:
+  When char.worth GMCP broadcast arrives and a pending_pup exists:
+  trains_earned = new_trains - pending_pup.trains_before
+  The pup event is recorded via record_pup_event() and pending_pup is cleared.
+  cached_trains is updated AFTER the delta computation.
+
+  Note: Practices are not earned from powerups; only trains are tracked.
+
+Per-Area Productivity (derived, not stored):
+  From kills table (level >= 200):
+  - Per area: avg XP/kill, avg combat_time/kill
+  - Est time per pup = (xp_per_level / avg_xp_per_kill) * avg_combat_time_per_kill
+  - Est trains per hour = (avg_trains_per_pup / est_time_per_pup) * 3600
+
+GMCP Ordering Edge Cases:
+  - char.base before char.worth (expected): handled by pending_pup mechanism
+  - char.worth before char.base (unlikely): worth update caches values, no
+    pending_pup exists yet, delta computed on next worth update (may be 0)
+  - Multiple pups before char.worth: previous pending_pup finalized with NULL
+    trains, new pending_pup created
+
+================================================================================
 GMCP BROADCASTS HANDLED
 ================================================================================
 
 char.base:
   - Caches perlevel for XP level-up calculation
   - Caches tier and remort for INSERT columns
-  - Caches pups (powerup count) for powerup segmentation at 200+
+  - Caches pups (powerup count) for pup event detection
+  - Detects pup events when pups value increases
 
 char.status:
   - Primary combat state driver (enemy, enemypct, level, tnl)
@@ -461,6 +527,10 @@ char.status:
 room.info:
   - Caches zone, room_num, room_name for kill/death location
 
+char.worth:
+  - Caches trains for pup train delta computation
+  - Finalizes pending pup events with trains_earned
+
 comm.quest:
   - Quest lifecycle tracking (start, comp, fail, timeout, status)
   - Dispatches to handle_quest() for database operations
@@ -468,7 +538,6 @@ comm.quest:
 Broadcasts NOT listened to (by design):
   - char.vitals: HP/mana/moves not tracked by LevelDB
   - char.stats: Stats not relevant to kill tracking
-  - char.worth: Gold no longer tracked (removed in v4.0)
   - comm.channel: LevelDB has no chat interaction detection
 
 ================================================================================
@@ -478,20 +547,14 @@ PLUGIN LIFECYCLE
 OnPluginInstall:
   1. Restore enabled state from saved variable
   2. Open database (leveldb.db)
-  3. Read current GMCP state (char.base, char.status, room.info) via gmcp()
-     to populate cached values. Handles mid-session plugin reload where
-     these broadcasts have already been sent and won't repeat.
-  4. Restore active_quest_id and active_campaign_id from saved state
-  5. Check quest status via GMCP comm.quest (reconcile quest state on reload)
-  6. If enabled, schedule delayed_cp_info() via DoAfterSpecial(2s) to detect
+  3. Read current GMCP state (char.base, char.worth, char.status, room.info)
+     to populate cached values. Handles mid-session plugin reload.
+  4. Set prev_pups = cached_pups to prevent false pup detection on reload
+  5. Restore active_quest_id and active_campaign_id from saved state
+  6. Check quest status via GMCP comm.quest (reconcile quest state on reload)
+  7. If enabled, schedule delayed_cp_info() via DoAfterSpecial(2s) to detect
      and reconcile in-progress campaigns on reconnect/reload
-  7. Display load message
-
-OnPluginBroadcast (char.base):
-  - Caches perlevel, tier, remort, and pups values from GMCP
-
-OnPluginBroadcast (comm.quest):
-  - Dispatches to handle_quest() for quest lifecycle tracking
+  8. Display load message
 
 OnPluginSaveState:
   - Persists enabled flag, active_quest_id, active_campaign_id
@@ -501,6 +564,7 @@ OnPluginClose:
 
 OnPluginDisconnect:
   - End any active combat tracking (prevents stale state on reconnect)
+  - Clear pending_pup (prevents stale pup events on reconnect)
 
 State Persistence:
   save_state="y" with three variables: enabled (boolean),
@@ -535,6 +599,7 @@ Schema Migrations:
   - v3.0 -> v4.0: ALTER TABLE kills ADD COLUMN mob_level INTEGER
   - v5.0 -> v6.0: ALTER TABLE campaigns ADD COLUMN expected_qp INTEGER
                    ALTER TABLE campaigns ADD COLUMN expected_gold INTEGER
+  - v6.0 -> v7.0: ALTER TABLE kills ADD COLUMN combat_time REAL
   Errors from "duplicate column name" are silently ignored. Old records retain
   NULL for new columns.
 
@@ -553,13 +618,12 @@ Substring matching (ldb zone, ldb mob):
 - Aardwolf mob/zone names never contain SQL LIKE wildcards (% or _),
   so no escaping is needed
 
-Powerup auto-adapt (ldb level, ldb this, ldb last):
-- When cached_level >= 200, these commands query by powerup number instead of level
-- ldb level [N]: N is a powerup number (default: current cached_pups)
-- ldb this: shows kills for current powerup (WHERE level=200 AND pup=N)
-- ldb last: shows kills for previous powerup (pup=N-1)
-- show_level_stats(level, pup, filter) adds AND pup=N to WHERE clause when pup is provided
-- Header displays "Powerup N kills:" instead of "Level N kills:"
+Powerup commands (ldb pup):
+- ldb level, ldb this, ldb last redirect to ldb pup at level 200+
+- ldb pup queries pup_events and kills (level >= 200) for productivity stats
+- Per-area productivity is derived: Est/Pup = (xp_per_level / avg_xp) * avg_time
+- ldb pup <id> queries kills between consecutive pup_events timestamps
+- ldb pup <zone> groups kills by mob_name for per-mob breakdown
 
 Tier/remort filtering (ldb level, ldb this, ldb last, ldb quest, ldb cp):
 - Default (no filter): queries with AND tier=cached_tier AND remort=cached_remorts
@@ -654,6 +718,17 @@ Documentation:
 ================================================================================
 VERSION HISTORY
 ================================================================================
+
+v7.0 (2026-04-01):
+  - Powerup module redesign: productivity-focused tracking
+  - New table: pup_events (sequential ID, trains_earned, zone, xp_per_level)
+  - New column: kills.combat_time (active combat duration per kill)
+  - New GMCP handler: char.worth (caches trains for pup train delta)
+  - Pup detection via char.base.pups increment with pending_pup mechanism
+  - New command: ldb pup [filter|zone|id] - powerup productivity stats
+  - Removed Pups bracket from remort/tier bracket tables
+  - ldb remort/tier now show separate powerup sections
+  - ldb level/this/last at 200+ redirect to ldb pup
 
 v6.0 (2026-03-26):
   - Quest tracking via GMCP comm.quest broadcasts (start/comp/fail/timeout/status)

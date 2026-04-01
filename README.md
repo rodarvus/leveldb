@@ -7,10 +7,16 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 ## Features
 
 **Combat tracking**
-- Per-kill records: mob name, zone, room, player level, XP gained, damage dealt, rounds fought, estimated mob level (from sacrifice gold)
+- Per-kill records: mob name, zone, room, player level, XP gained, damage dealt, rounds fought, estimated mob level (from sacrifice gold), combat time
 - Per-death records: mob, zone, room, level, tier, remort
 - XP calculation with level-up and powerup detection
 - Tier and remort stored with every record
+
+**Powerup (pup) tracking**
+- Automatic detection via GMCP when powerup count increments
+- Records trains earned per powerup event
+- Per-area productivity stats: avg XP/kill, avg combat time/kill, estimated time per pup, trains per hour
+- Active combat time tracked per kill (using `utils.timer()`)
 
 **Quest tracking**
 - Automatic tracking via GMCP comm.quest broadcasts
@@ -28,9 +34,8 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 **Query and analysis**
 - Per-level kill breakdowns with totals and averages
 - Tier/remort filtering on all commands (default: current T+R; supports `all`, `T1 R5`, `T1`, `R4`)
-- Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200, Pups)
-- Tier summary: compare remorts side-by-side within a tier
-- Powerup support: at level 200+, queries auto-adapt to segment by powerup number
+- Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200) with separate powerup section
+- Tier summary: compare remorts side-by-side within a tier, with powerup comparison
 - Per-zone and per-mob stats with substring search
 - Top-N rankings by kill count, total XP, or average XP
 - Quest and campaign history tables with colored status, summaries, and averages
@@ -42,9 +47,12 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 | `ldb` | Show status (enabled, DB path, record counts) |
 | `ldb help` | List all commands |
 | `ldb on` / `ldb off` | Enable/disable data collection |
-| `ldb level [N] [filter]` | Per-kill table for a level (default: current). At 200+: N is a powerup number |
-| `ldb this [filter]` | Per-kill table for current level/powerup |
-| `ldb last [filter]` | Per-kill table for previous level/powerup |
+| `ldb level [N] [filter]` | Per-kill table for a level (default: current) |
+| `ldb this [filter]` | Per-kill table for current level |
+| `ldb last [filter]` | Per-kill table for previous level |
+| `ldb pup [filter\|zone]` | Powerup productivity stats (summary + per-area table) |
+| `ldb pup <id>` | Per-kill detail for a specific powerup by ID |
+| `ldb pup list [N]` | Last N powerup events (default 10) |
 | `ldb remort [R] [T<n>]` | Bracket summary for a remort (default: current T+R) |
 | `ldb tier [T]` | Compare remorts within a tier (default: current) |
 | `ldb zone [name]` | Stats for a zone (default: current; substring match) |
@@ -58,7 +66,9 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 | `ldb cp show <id>` | Detailed view of a campaign by database ID |
 | `ldb db` | Database file info (path, size, record counts) |
 
-**Filter options** (for level/this/last/quest/cp): default = current tier and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T1` = all remorts within a tier. `R4` = specific remort, current tier.
+**Filter options** (for level/this/last/pup/quest/cp): default = current tier and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T1` = all remorts within a tier. `R4` = specific remort, current tier.
+
+At level 200+, `ldb level`, `ldb this`, and `ldb last` redirect to `ldb pup`.
 
 See [USAGE.md](USAGE.md) for detailed descriptions and example output for every command.
 
