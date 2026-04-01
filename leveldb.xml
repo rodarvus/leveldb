@@ -213,6 +213,27 @@
       script="ldb_on_powerup"
       sequence="100"
    ></trigger>
+   <!-- Powerup train rewards (always-on, fire right after powerup message) -->
+   <trigger
+      name="trg_ldb_pup_trains"
+      match="^You gain (\d+) trains?\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_pup_trains"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_pup_trains_lucky"
+      match="^Lucky! You gain an extra (\d+) training sessions?!$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_pup_trains"
+      sequence="100"
+   ></trigger>
 
    <!-- ============================================================ -->
    <!-- Campaign triggers (always-on, don't gag)                     -->
@@ -420,14 +441,11 @@ local cached_zone = nil
 local cached_room_num = nil
 local cached_room_name = nil
 local cached_enemy = ""
-local cached_trains = nil    -- from char.worth
-local prev_trains = nil      -- trains value before most recent char.worth update
-
 -- =============================================================================
 -- Pup tracking state
 -- =============================================================================
-local prev_pups = nil        -- Previous pups value for change detection
-local pending_pup = nil      -- Pending pup event awaiting char.worth update
+local prev_pups = nil           -- Previous pups value for char.base fallback detection
+local last_pup_event_id = nil   -- DB id of most recent pup_events row (for train UPDATE)
 
 -- =============================================================================
 -- Quest/Campaign tracking state
@@ -788,23 +806,19 @@ function OnPluginBroadcast(msg, id, name, text)
          if base.remorts then cached_remorts = tonumber(base.remorts) end
          if base.pups then cached_pups = tonumber(base.pups) end
 
-         -- Detect pup event: pups increased (fallback if text trigger missed)
+         -- Fallback pup detection if text trigger missed (e.g., trigger disabled)
          if cached_pups and prev_pups and cached_pups > prev_pups then
-            -- Only create pending_pup if text trigger hasn't already done so
-            if not pending_pup or pending_pup.pup_number ~= cached_pups then
-               if pending_pup then
-                  record_pup_event(pending_pup, nil)
-               end
-               -- Use prev_trains as baseline (char.worth may have already updated)
-               pending_pup = {
+            -- Only record if text trigger hasn't already handled this pup
+            if not last_pup_event_id then
+               record_pup_event({
                   timestamp = os.time(),
                   tier = cached_tier,
                   remort = cached_remorts,
                   pup_number = cached_pups,
                   zone = cached_zone or "Unknown",
                   xp_per_level = cached_perlevel,
-                  trains_before = prev_trains or cached_trains,
-               }
+               }, nil)
+               last_pup_event_id = db and db:last_insert_rowid() or nil
             end
          end
          prev_pups = cached_pups
@@ -878,29 +892,6 @@ function OnPluginBroadcast(msg, id, name, text)
          cached_room_name = room.name
       end
 
-   elseif text == "char.worth" then
-      local worth = gmcp("char.worth")
-      if worth then
-         local new_trains = tonumber(worth.trains)
-
-         -- Finalize pending pup event if we have one
-         if pending_pup and new_trains then
-            local trains_earned = nil
-            if pending_pup.trains_before then
-               trains_earned = new_trains - pending_pup.trains_before
-               if trains_earned < 0 then trains_earned = nil end
-            end
-            record_pup_event(pending_pup, trains_earned)
-            pending_pup = nil
-         end
-
-         -- Save previous value, then update
-         if new_trains then
-            prev_trains = cached_trains
-            cached_trains = new_trains
-         end
-      end
-
    elseif text == "comm.quest" then
       local quest_data = gmcp("comm.quest")
       if quest_data then
@@ -941,6 +932,7 @@ end
 
 function ldb_on_powerup(name, line, wildcards)
    if not enabled then return end
+   if not db then return end
 
    local pup_number = tonumber(wildcards[1])
    if not pup_number then return end
@@ -949,43 +941,30 @@ function ldb_on_powerup(name, line, wildcards)
    cached_pups = pup_number
    prev_pups = pup_number
 
-   -- Finalize any stale pending_pup
-   if pending_pup then
-      record_pup_event(pending_pup, nil)
-      pending_pup = nil
-   end
+   -- Record pup event immediately with trains_earned = 0
+   -- Train text triggers will UPDATE this record to add trains
+   record_pup_event({
+      timestamp = os.time(),
+      tier = cached_tier,
+      remort = cached_remorts,
+      pup_number = pup_number,
+      zone = cached_zone or "Unknown",
+      xp_per_level = cached_perlevel,
+   }, 0)
+   last_pup_event_id = db:last_insert_rowid()
+end
 
-   -- char.worth typically fires BEFORE this text trigger, so cached_trains
-   -- already has the post-pup value. Use prev_trains as the pre-pup baseline.
-   -- If both are available, record immediately (no need to wait for char.worth).
-   local trains_earned = nil
-   if prev_trains and cached_trains then
-      trains_earned = cached_trains - prev_trains
-      if trains_earned <= 0 then trains_earned = nil end
-   end
+function ldb_on_pup_trains(name, line, wildcards)
+   if not enabled then return end
+   if not db then return end
+   if not last_pup_event_id then return end
 
-   if trains_earned then
-      -- We have everything — record immediately
-      record_pup_event({
-         timestamp = os.time(),
-         tier = cached_tier,
-         remort = cached_remorts,
-         pup_number = pup_number,
-         zone = cached_zone or "Unknown",
-         xp_per_level = cached_perlevel,
-      }, trains_earned)
-   else
-      -- Fallback: wait for char.worth to arrive
-      pending_pup = {
-         timestamp = os.time(),
-         tier = cached_tier,
-         remort = cached_remorts,
-         pup_number = pup_number,
-         zone = cached_zone or "Unknown",
-         xp_per_level = cached_perlevel,
-         trains_before = cached_trains,
-      }
-   end
+   local trains = tonumber(wildcards[1])
+   if not trains or trains <= 0 then return end
+
+   db:exec(string.format(
+      "UPDATE pup_events SET trains_earned = COALESCE(trains_earned, 0) + %d WHERE id = %d",
+      trains, last_pup_event_id))
 end
 
 -- =============================================================================
@@ -3290,11 +3269,6 @@ function OnPluginInstall()
    end
    prev_pups = cached_pups  -- Prevent false pup detection on reload
 
-   local worth = gmcp("char.worth")
-   if worth then
-      if worth.trains then cached_trains = tonumber(worth.trains) end
-   end
-
    local status = gmcp("char.status")
    if status then
       local new_level = tonumber(status.level)
@@ -3350,7 +3324,6 @@ function OnPluginDisconnect()
    if in_combat then
       end_combat()
    end
-   pending_pup = nil
 end
 ]]>
 </script>

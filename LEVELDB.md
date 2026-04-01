@@ -478,24 +478,20 @@ POWERUP (PUP) TRACKING
 
 Pup Detection:
   Primary: text trigger matches "Congratulations, X. You have increased your
-  powerups to N." This fires reliably for every pup.
+  powerups to N." This fires reliably for every pup. The handler records a
+  pup_events row immediately with trains_earned = 0, and saves the row ID.
 
-  Fallback: char.base GMCP broadcast with increased pups value. Only creates
-  pending_pup if the text trigger hasn't already handled this pup number.
+  Fallback: char.base GMCP broadcast with increased pups value. Records the
+  pup event with NULL trains if the text trigger hasn't already handled it.
 
-  If a stale pending_pup exists when a new pup is detected, the stale one is
-  finalized with NULL trains.
+Train Tracking:
+  Two text triggers capture trains awarded after each powerup:
+  - "You gain N trains." -> adds N to the most recent pup_events record
+  - "Lucky! You gain an extra N training sessions!" -> adds N to the same record
 
-Train Delta Computation:
-  GMCP char.worth typically fires BEFORE the text trigger, so cached_trains
-  already holds the post-pup value when the trigger runs. The plugin tracks
-  prev_trains (the value before the most recent char.worth update) to compute:
-  trains_earned = cached_trains - prev_trains
-
-  When both values are available, the pup event is recorded immediately in the
-  text trigger handler. If prev_trains is not yet available (e.g., first pup
-  after plugin load), a pending_pup is created and finalized when the next
-  char.worth broadcast arrives.
+  Both use UPDATE ... SET trains_earned = COALESCE(trains_earned, 0) + N
+  on the pup_events row saved by the powerup trigger. This is simple and
+  reliable — no GMCP timing dependencies.
 
   Note: Practices are not earned from powerups; only trains are tracked.
 
@@ -504,15 +500,6 @@ Per-Area Productivity (derived, not stored):
   - Per area: avg XP/kill, avg combat_time/kill
   - Est time per pup = (xp_per_level / avg_xp_per_kill) * avg_combat_time_per_kill
   - Est trains per hour = (avg_trains_per_pup / est_time_per_pup) * 3600
-
-Timing:
-  - char.worth fires before text trigger (typical): prev_trains has pre-pup
-    value, cached_trains has post-pup value. Text trigger computes delta
-    immediately and records the pup event.
-  - char.worth fires after text trigger (rare): text trigger creates
-    pending_pup with trains_before = cached_trains. char.worth finalizes it.
-  - char.base fires (fallback): only creates pending_pup if text trigger
-    hasn't already handled this pup number. Uses prev_trains as baseline.
 
 ================================================================================
 GMCP BROADCASTS HANDLED
@@ -532,10 +519,6 @@ char.status:
 room.info:
   - Caches zone, room_num, room_name for kill/death location
 
-char.worth:
-  - Caches trains for pup train delta computation
-  - Finalizes pending pup events with trains_earned
-
 comm.quest:
   - Quest lifecycle tracking (start, comp, fail, timeout, status)
   - Dispatches to handle_quest() for database operations
@@ -552,7 +535,7 @@ PLUGIN LIFECYCLE
 OnPluginInstall:
   1. Restore enabled state from saved variable
   2. Open database (leveldb.db)
-  3. Read current GMCP state (char.base, char.worth, char.status, room.info)
+  3. Read current GMCP state (char.base, char.status, room.info) via gmcp()
      to populate cached values. Handles mid-session plugin reload.
   4. Set prev_pups = cached_pups to prevent false pup detection on reload
   5. Restore active_quest_id and active_campaign_id from saved state
@@ -569,7 +552,6 @@ OnPluginClose:
 
 OnPluginDisconnect:
   - End any active combat tracking (prevents stale state on reconnect)
-  - Clear pending_pup (prevents stale pup events on reconnect)
 
 State Persistence:
   save_state="y" with three variables: enabled (boolean),
