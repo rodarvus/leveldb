@@ -66,7 +66,7 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 | `ldb cp show <id>` | Detailed view of a campaign by database ID |
 | `ldb db` | Database file info (path, size, record counts) |
 
-**Filter options** (for level/this/last/pup/quest/cp): default = current tier and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T1` = all remorts within a tier. `R4` = specific remort, current tier.
+**Filter options** (for level/this/last/pup/quest/cp): default = current tier+redo and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T9+3 R5` = tier 9, redo 3, remort 5. `T1` = all remorts within a tier. `R4` = specific remort, current tier. Redo is hidden in display when 0.
 
 At level 200+, `ldb level`, `ldb this`, and `ldb last` redirect to `ldb pup`.
 

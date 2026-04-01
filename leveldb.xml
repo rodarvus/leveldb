@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="7.0"
+   version="8.0"
    save_state="y"
    >
 
@@ -433,6 +433,7 @@ local db_path = nil         -- Full path to database
 -- =============================================================================
 local cached_tier = nil
 local cached_remorts = nil
+local cached_redos = nil
 local cached_pups = nil
 local cached_perlevel = 1000
 local cached_level = nil
@@ -591,6 +592,12 @@ local function run_migrations()
    db:exec("ALTER TABLE campaigns ADD COLUMN expected_gold INTEGER")
    -- Migration: add combat_time column (v6.0 -> v7.0)
    db:exec("ALTER TABLE kills ADD COLUMN combat_time REAL")
+   -- Migration: add redo column (v7.0 -> v8.0)
+   db:exec("ALTER TABLE kills ADD COLUMN redo INTEGER")
+   db:exec("ALTER TABLE deaths ADD COLUMN redo INTEGER")
+   db:exec("ALTER TABLE quests ADD COLUMN redo INTEGER")
+   db:exec("ALTER TABLE campaigns ADD COLUMN redo INTEGER")
+   db:exec("ALTER TABLE pup_events ADD COLUMN redo INTEGER")
    -- Errors from "duplicate column name" are silently ignored
 end
 
@@ -616,6 +623,11 @@ local function init_indexes()
       CREATE INDEX IF NOT EXISTS idx_campaigns_remort ON campaigns(remort);
       CREATE INDEX IF NOT EXISTS idx_campaign_mobs_cid ON campaign_mobs(campaign_id);
       CREATE INDEX IF NOT EXISTS idx_pup_events_tier_remort ON pup_events(tier, remort);
+      CREATE INDEX IF NOT EXISTS idx_kills_redo ON kills(redo);
+      CREATE INDEX IF NOT EXISTS idx_deaths_redo ON deaths(redo);
+      CREATE INDEX IF NOT EXISTS idx_quests_redo ON quests(redo);
+      CREATE INDEX IF NOT EXISTS idx_campaigns_redo ON campaigns(redo);
+      CREATE INDEX IF NOT EXISTS idx_pup_events_redo ON pup_events(redo);
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_indexes")
@@ -716,8 +728,8 @@ local function record_kill()
 
    local query = string.format(
       "INSERT INTO kills (timestamp, mob_name, zone, room_num, room_name, level, " ..
-      "xp_gained, damage_total, rounds, tier, remort, pup, mob_level, combat_time) " ..
-      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %s, %s, %s, %s, %s)",
+      "xp_gained, damage_total, rounds, tier, remort, pup, mob_level, combat_time, redo) " ..
+      "VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %d, %s, %s, %s, %s, %s, %s)",
       os.time(),
       fixsql(fight_start.enemy),
       fixsql(fight_start.zone),
@@ -731,7 +743,8 @@ local function record_kill()
       cached_remorts and tostring(cached_remorts) or "NULL",
       fight_start.pup and tostring(fight_start.pup) or "NULL",
       sacrifice_mob_level and tostring(sacrifice_mob_level) or "NULL",
-      combat_time and string.format("%.3f", combat_time) or "NULL"
+      combat_time and string.format("%.3f", combat_time) or "NULL",
+      cached_redos and tostring(cached_redos) or "NULL"
    )
 
    db:exec(query)
@@ -745,8 +758,8 @@ local function record_death()
    local enemy = (in_combat and fight_start) and fight_start.enemy or cached_enemy
 
    local query = string.format(
-      "INSERT INTO deaths (timestamp, mob_name, zone, room_num, room_name, level, tier, remort) " ..
-      "VALUES (%d, %s, %s, %s, %s, %d, %s, %s)",
+      "INSERT INTO deaths (timestamp, mob_name, zone, room_num, room_name, level, tier, remort, redo) " ..
+      "VALUES (%d, %s, %s, %s, %s, %d, %s, %s, %s)",
       os.time(),
       fixsql(enemy),
       fixsql(cached_zone or "Unknown"),
@@ -754,7 +767,8 @@ local function record_death()
       fixsql(cached_room_name),
       cached_level or 0,
       cached_tier and tostring(cached_tier) or "NULL",
-      cached_remorts and tostring(cached_remorts) or "NULL"
+      cached_remorts and tostring(cached_remorts) or "NULL",
+      cached_redos and tostring(cached_redos) or "NULL"
    )
 
    db:exec(query)
@@ -767,15 +781,16 @@ local function record_pup_event(pup_data, trains_earned)
 
    local query = string.format(
       "INSERT INTO pup_events (timestamp, tier, remort, pup_number, zone, " ..
-      "trains_earned, xp_per_level) " ..
-      "VALUES (%d, %s, %s, %d, %s, %s, %s)",
+      "trains_earned, xp_per_level, redo) " ..
+      "VALUES (%d, %s, %s, %d, %s, %s, %s, %s)",
       pup_data.timestamp,
       pup_data.tier and tostring(pup_data.tier) or "0",
       pup_data.remort and tostring(pup_data.remort) or "0",
       pup_data.pup_number,
       fixsql(pup_data.zone),
       trains_earned and tostring(trains_earned) or "NULL",
-      pup_data.xp_per_level and tostring(pup_data.xp_per_level) or "NULL"
+      pup_data.xp_per_level and tostring(pup_data.xp_per_level) or "NULL",
+      pup_data.redo and tostring(pup_data.redo) or "NULL"
    )
 
    db:exec(query)
@@ -804,6 +819,7 @@ function OnPluginBroadcast(msg, id, name, text)
          if base.perlevel then cached_perlevel = tonumber(base.perlevel) or 1000 end
          if base.tier then cached_tier = tonumber(base.tier) end
          if base.remorts then cached_remorts = tonumber(base.remorts) end
+         if base.redos then cached_redos = tonumber(base.redos) end
          if base.pups then cached_pups = tonumber(base.pups) end
       end
 
@@ -929,6 +945,7 @@ function ldb_on_powerup(name, line, wildcards)
       timestamp = os.time(),
       tier = cached_tier,
       remort = cached_remorts,
+      redo = cached_redos,
       pup_number = pup_number,
       zone = cached_zone or "Unknown",
       xp_per_level = cached_perlevel,
@@ -1050,8 +1067,8 @@ function handle_quest(data)
       -- New quest assigned
       close_open_quest()
       local query = string.format(
-         "INSERT INTO quests (timestamp, level, tier, remort, mob_name, area, room, timer) " ..
-         "VALUES (%d, %d, %s, %s, %s, %s, %s, %s)",
+         "INSERT INTO quests (timestamp, level, tier, remort, mob_name, area, room, timer, redo) " ..
+         "VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s)",
          os.time(),
          cached_level or 0,
          cached_tier and tostring(cached_tier) or "NULL",
@@ -1059,7 +1076,8 @@ function handle_quest(data)
          fixsql(data.targ),
          fixsql(data.area),
          fixsql(data.room),
-         data.timer and tostring(data.timer) or "NULL")
+         data.timer and tostring(data.timer) or "NULL",
+         cached_redos and tostring(cached_redos) or "NULL")
       db:exec(query)
       if not dbcheck(db:errcode(), db:errmsg(), query) then
          active_quest_id = db:last_insert_rowid()
@@ -1115,8 +1133,8 @@ function handle_quest(data)
       elseif data.targ and data.targ ~= "missing" and not active_quest_id then
          -- Active quest found but we have no record — create one
          local query = string.format(
-            "INSERT INTO quests (timestamp, level, tier, remort, mob_name, area, room, timer) " ..
-            "VALUES (%d, %d, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO quests (timestamp, level, tier, remort, mob_name, area, room, timer, redo) " ..
+            "VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s)",
             os.time(),
             cached_level or 0,
             cached_tier and tostring(cached_tier) or "NULL",
@@ -1124,7 +1142,8 @@ function handle_quest(data)
             fixsql(data.targ),
             fixsql(data.area),
             fixsql(data.room),
-            data.timer and tostring(data.timer) or "NULL")
+            data.timer and tostring(data.timer) or "NULL",
+            cached_redos and tostring(cached_redos) or "NULL")
          db:exec(query)
          if not dbcheck(db:errcode(), db:errmsg(), query) then
             active_quest_id = db:last_insert_rowid()
@@ -1143,11 +1162,12 @@ function ldb_on_cp_start(name, line, wildcards)
    close_open_campaign()
 
    local query = string.format(
-      "INSERT INTO campaigns (timestamp, level, tier, remort) VALUES (%d, %d, %s, %s)",
+      "INSERT INTO campaigns (timestamp, level, tier, remort, redo) VALUES (%d, %d, %s, %s, %s)",
       os.time(),
       cached_level or 0,
       cached_tier and tostring(cached_tier) or "NULL",
-      cached_remorts and tostring(cached_remorts) or "NULL")
+      cached_remorts and tostring(cached_remorts) or "NULL",
+      cached_redos and tostring(cached_redos) or "NULL")
    db:exec(query)
    if not dbcheck(db:errcode(), db:errmsg(), query) then
       active_campaign_id = db:last_insert_rowid()
@@ -1239,11 +1259,12 @@ function ldb_on_cpinfo_end(name, line, wildcards)
       -- No saved campaign — create a new record from cp info data
       local level = cpinfo_level or cached_level or 0
       local query = string.format(
-         "INSERT INTO campaigns (timestamp, level, tier, remort) VALUES (%d, %d, %s, %s)",
+         "INSERT INTO campaigns (timestamp, level, tier, remort, redo) VALUES (%d, %d, %s, %s, %s)",
          os.time(),
          level,
          cached_tier and tostring(cached_tier) or "NULL",
-         cached_remorts and tostring(cached_remorts) or "NULL")
+         cached_remorts and tostring(cached_remorts) or "NULL",
+         cached_redos and tostring(cached_redos) or "NULL")
       db:exec(query)
       if not dbcheck(db:errcode(), db:errmsg(), query) then
          active_campaign_id = db:last_insert_rowid()
@@ -1268,11 +1289,12 @@ function ldb_on_cpinfo_end(name, line, wildcards)
          close_open_campaign()
          local level = cpinfo_level or cached_level or 0
          local query = string.format(
-            "INSERT INTO campaigns (timestamp, level, tier, remort) VALUES (%d, %d, %s, %s)",
+            "INSERT INTO campaigns (timestamp, level, tier, remort, redo) VALUES (%d, %d, %s, %s, %s)",
             os.time(),
             level,
             cached_tier and tostring(cached_tier) or "NULL",
-            cached_remorts and tostring(cached_remorts) or "NULL")
+            cached_remorts and tostring(cached_remorts) or "NULL",
+            cached_redos and tostring(cached_redos) or "NULL")
          db:exec(query)
          if not dbcheck(db:errcode(), db:errmsg(), query) then
             active_campaign_id = db:last_insert_rowid()
@@ -1403,31 +1425,69 @@ local function require_db()
 end
 
 -- =============================================================================
--- Helper: parse tier/remort filter from command arguments
+-- Helper: format tier label with redo (hides +0)
+-- =============================================================================
+local function format_tier_label(tier, redo)
+   if redo and redo > 0 then
+      return string.format("T%d+%d", tier, redo)
+   else
+      return string.format("T%d", tier)
+   end
+end
+
+-- =============================================================================
+-- Helper: SQL WHERE fragment for redo (handles NULL as 0)
+-- =============================================================================
+local function redo_where(redo_value)
+   return string.format("COALESCE(redo, 0) = %d", redo_value or 0)
+end
+
+-- =============================================================================
+-- Helper: parse tier/remort/redo filter from command arguments
 -- Returns: {all=true} or {tier=N, remort=N} or {tier=N} or {remort=N} or {}
 -- Returns nil on invalid input (error already printed)
 -- =============================================================================
-local function parse_filter(str)
+local function parse_args(str, opts)
+   opts = opts or {}
    if not str or str == "" then return {} end
-   local s = string.lower(string.match(str, "^%s*(.-)%s*$"))  -- trim
-
+   local s = string.lower(string.match(str, "^%s*(.-)%s*$"))
    if s == "" then return {} end
    if s == "all" then return {all = true} end
 
-   local filter = {}
-   local t = string.match(s, "t(%d+)")
+   local result = {}
+
+   -- Bare number: context-dependent (remort by default, tier if opts.bare_is_tier)
+   local bare = string.match(s, "^(%d+)$")
+   if bare then
+      if opts.bare_is_tier then
+         result.tier = tonumber(bare)
+         result.redo = 0
+      else
+         result.remort = tonumber(bare)
+      end
+      return result
+   end
+
+   -- Parse T<n> with optional +<redo>
+   local t, plus_redo = string.match(s, "t(%d+)%+(%d+)")
+   if not t then
+      t = string.match(s, "t(%d+)")
+   end
    local r = string.match(s, "r(%d+)")
 
    if not t and not r then
       ColourNote("red", "", PREFIX .. "Invalid filter: " .. str)
-      ColourNote("red", "", PREFIX .. "Use: all, T1 R5, R4, or T1")
+      ColourNote("red", "", PREFIX .. "Use: all, T1 R5, T9+3, T9+3 R5, R4, or T1")
       return nil
    end
 
-   if t then filter.tier = tonumber(t) end
-   if r then filter.remort = tonumber(r) end
+   if t then
+      result.tier = tonumber(t)
+      result.redo = plus_redo and tonumber(plus_redo) or 0
+   end
+   if r then result.remort = tonumber(r) end
 
-   return filter
+   return result
 end
 
 -- =============================================================================
@@ -1470,6 +1530,9 @@ function ldb_status(name, line, wildcards)
 
    if cached_level then
       ColourNote("cyan", "", "  Current level: " .. cached_level)
+      if cached_redos and cached_redos > 0 then
+         ColourNote("cyan", "", "  Current redo: " .. cached_redos)
+      end
       if cached_level >= 200 and cached_pups then
          ColourNote("cyan", "", "  Current powerup: " .. cached_pups)
          if cached_tnl and cached_perlevel then
@@ -1518,9 +1581,10 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
    ColourNote("cyan", "", "")
-   ColourNote("cyan", "", "  Filters: default = current tier & remort")
+   ColourNote("cyan", "", "  Filters: default = current tier, redo & remort")
    ColourNote("cyan", "", "    all                   - All tiers and remorts (separate sections)")
    ColourNote("cyan", "", "    T1 R5                 - Specific tier and remort")
+   ColourNote("cyan", "", "    T9+3 R5               - Specific tier+redo and remort")
    ColourNote("cyan", "", "    T1                    - All remorts within a tier (separate sections)")
    ColourNote("cyan", "", "    R4                    - Specific remort, current tier")
 end
@@ -1545,7 +1609,7 @@ end
 function ldb_level(name, line, wildcards)
    if not require_db() then return end
    local arg = tonumber(wildcards[1])
-   local filter = parse_filter(wildcards[2])
+   local filter = parse_args(wildcards[2])
    if not filter then return end
 
    if cached_level and cached_level >= 200 then
@@ -1566,7 +1630,7 @@ end
 -- =============================================================================
 function ldb_thislevel(name, line, wildcards)
    if not require_db() then return end
-   local filter = parse_filter(wildcards[1])
+   local filter = parse_args(wildcards[1])
    if not filter then return end
    if not cached_level then
       ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
@@ -1584,7 +1648,7 @@ end
 -- =============================================================================
 function ldb_lastlevel(name, line, wildcards)
    if not require_db() then return end
-   local filter = parse_filter(wildcards[1])
+   local filter = parse_args(wildcards[1])
    if not filter then return end
    if not cached_level then
       ColourNote("red", "", PREFIX .. "Current level unknown. Try again after GMCP data arrives.")
@@ -1608,16 +1672,19 @@ end
 -- Helper: build pup WHERE clause from filter + tier/remort defaults
 local function pup_where(filter)
    local tier = filter.tier or cached_tier
+   local redo = filter.redo
+   if not filter.tier then redo = cached_redos or 0 end
+   if redo == nil then redo = 0 end
    local remort = filter.remort or cached_remorts
    if filter.all then
-      return "level >= 200", nil, nil
+      return "level >= 200", nil, nil, nil
    end
    if not tier or not remort then return nil end
    if filter.tier and not filter.remort then
       -- Tier only: all remorts within tier
-      return string.format("level >= 200 AND tier = %d", tier), tier, nil
+      return string.format("level >= 200 AND tier = %d AND %s", tier, redo_where(redo)), tier, nil, redo
    end
-   return string.format("level >= 200 AND tier = %d AND remort = %d", tier, remort), tier, remort
+   return string.format("level >= 200 AND tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo)), tier, remort, redo
 end
 
 -- Helper: render per-area pup productivity table
@@ -1747,7 +1814,7 @@ end
 local function render_pup_list(pup_where_clause, limit)
    local pups = {}
    for row in db:nrows(string.format(
-      "SELECT id, timestamp, tier, remort, pup_number, zone, trains_earned " ..
+      "SELECT id, timestamp, tier, remort, redo, pup_number, zone, trains_earned " ..
       "FROM pup_events WHERE %s ORDER BY id DESC LIMIT %d",
       pup_where_clause, limit)) do
       table.insert(pups, row)
@@ -1755,12 +1822,12 @@ local function render_pup_list(pup_where_clause, limit)
 
    if #pups == 0 then return end
 
-   local fmt = "  %5s  %-5s  %5s  %-16s  %6s"
+   local fmt = "  %5s  %-7s  %5s  %-16s  %6s"
    ColourNote("cyan", "", string.format(fmt, "ID", "T/R", "Pup#", "Zone", "Trains"))
-   ColourNote("cyan", "", string.format(fmt, "-----", "-----", "-----", "----------------", "------"))
+   ColourNote("cyan", "", string.format(fmt, "-----", "-------", "-----", "----------------", "------"))
 
    for _, p in ipairs(pups) do
-      local tr_label = string.format("T%dR%d", p.tier, p.remort)
+      local tr_label = format_tier_label(p.tier, p.redo) .. "R" .. p.remort
       local zone_display = p.zone or "?"
       if #zone_display > 16 then zone_display = string.sub(zone_display, 1, 15) .. "+" end
       local trains_str = p.trains_earned and tostring(p.trains_earned) or "N/A"
@@ -1772,7 +1839,7 @@ end
 
 -- Show pup overview for a filter (summary + per-area table)
 local function show_pup_overview(filter)
-   local kill_where, tier, remort = pup_where(filter)
+   local kill_where, tier, remort, redo = pup_where(filter)
    if not kill_where then
       ColourNote("red", "", PREFIX .. "Current tier/remort unknown. Try again after GMCP data arrives.")
       return
@@ -1783,9 +1850,9 @@ local function show_pup_overview(filter)
    if filter.all then
       label = "all"
    elseif tier and not remort then
-      label = string.format("T%d", tier)
+      label = format_tier_label(tier, redo)
    else
-      label = string.format("T%d R%d", tier or 0, remort or 0)
+      label = format_tier_label(tier or 0, redo) .. " R" .. (remort or 0)
    end
 
    -- Build pup_events WHERE clause matching the kill_where scope
@@ -1793,9 +1860,9 @@ local function show_pup_overview(filter)
    if filter.all then
       pup_where_clause = "1=1"
    elseif tier and not remort then
-      pup_where_clause = string.format("tier = %d", tier)
+      pup_where_clause = string.format("tier = %d AND %s", tier, redo_where(redo))
    else
-      pup_where_clause = string.format("tier = %d AND remort = %d", tier or 0, remort or 0)
+      pup_where_clause = string.format("tier = %d AND remort = %d AND %s", tier or 0, remort or 0, redo_where(redo))
    end
 
    ColourNote("cyan", "", PREFIX .. "Powerup Summary (" .. label .. "):")
@@ -1821,23 +1888,25 @@ local function show_pup_detail(pup_id)
       return
    end
 
-   -- Find previous pup event for same tier+remort to get time bounds
+   local pup_redo = pup_event.redo or 0
+
+   -- Find previous pup event for same tier+remort+redo to get time bounds
    local prev_timestamp = 0
    for row in db:nrows(string.format(
       "SELECT MAX(timestamp) as ts FROM pup_events " ..
-      "WHERE tier = %d AND remort = %d AND id < %d",
-      pup_event.tier, pup_event.remort, pup_id)) do
+      "WHERE tier = %d AND remort = %d AND %s AND id < %d",
+      pup_event.tier, pup_event.remort, redo_where(pup_redo), pup_id)) do
       if row.ts then prev_timestamp = row.ts end
    end
 
    -- Query kills between prev pup and this pup
    local kills_query = string.format(
       "SELECT mob_name, zone, xp_gained, damage_total, rounds, mob_level, combat_time " ..
-      "FROM kills WHERE level >= 200 AND tier = %d AND remort = %d " ..
+      "FROM kills WHERE level >= 200 AND tier = %d AND remort = %d AND %s " ..
       "AND timestamp > %d AND timestamp <= %d " ..
       "AND (mob_level IS NULL OR mob_level > 200) " ..
       "ORDER BY timestamp",
-      pup_event.tier, pup_event.remort, prev_timestamp, pup_event.timestamp)
+      pup_event.tier, pup_event.remort, redo_where(pup_redo), prev_timestamp, pup_event.timestamp)
 
    local kills = {}
    for row in db:nrows(kills_query) do
@@ -1845,7 +1914,7 @@ local function show_pup_detail(pup_id)
    end
 
    -- Header
-   local label = string.format("T%d R%d, pup %d", pup_event.tier, pup_event.remort, pup_event.pup_number)
+   local label = format_tier_label(pup_event.tier, pup_redo) .. string.format(" R%d, pup %d", pup_event.remort, pup_event.pup_number)
    local zone_str = pup_event.zone and (" - " .. pup_event.zone) or ""
    ColourNote("cyan", "", string.format("%sPowerup #%d (%s)%s:", PREFIX, pup_id, label, zone_str))
 
@@ -1935,6 +2004,7 @@ end
 -- Show per-mob detail for a zone during pup leveling
 local function show_pup_zone_detail(zone_search)
    local tier = cached_tier
+   local redo = cached_redos or 0
    local remort = cached_remorts
    if not tier or not remort then
       ColourNote("red", "", PREFIX .. "Current tier/remort unknown. Try again after GMCP data arrives.")
@@ -1945,11 +2015,11 @@ local function show_pup_zone_detail(zone_search)
    local query = string.format(
       "SELECT mob_name, COUNT(*) as cnt, AVG(xp_gained) as avg_xp, " ..
       "AVG(combat_time) as avg_time, AVG(rounds) as avg_rnd " ..
-      "FROM kills WHERE level >= 200 AND tier = %d AND remort = %d " ..
+      "FROM kills WHERE level >= 200 AND tier = %d AND remort = %d AND %s " ..
       "AND zone LIKE %s " ..
       "AND (mob_level IS NULL OR mob_level > 200) " ..
       "GROUP BY mob_name ORDER BY cnt DESC",
-      tier, remort, fixsql(zone_pattern))
+      tier, remort, redo_where(redo), fixsql(zone_pattern))
 
    local mobs = {}
    for row in db:nrows(query) do
@@ -1959,12 +2029,12 @@ local function show_pup_zone_detail(zone_search)
    -- Find actual zone name from first kill
    local actual_zone = zone_search
    for row in db:nrows(string.format(
-      "SELECT zone FROM kills WHERE level >= 200 AND tier = %d AND remort = %d " ..
-      "AND zone LIKE %s LIMIT 1", tier, remort, fixsql(zone_pattern))) do
+      "SELECT zone FROM kills WHERE level >= 200 AND tier = %d AND remort = %d AND %s " ..
+      "AND zone LIKE %s LIMIT 1", tier, remort, redo_where(redo), fixsql(zone_pattern))) do
       actual_zone = row.zone
    end
 
-   local label = string.format("T%d R%d", tier, remort)
+   local label = format_tier_label(tier, redo) .. " R" .. remort
    ColourNote("cyan", "", string.format("%sPup zone detail: %s (%s):", PREFIX, actual_zone, label))
 
    if #mobs == 0 then
@@ -2008,13 +2078,14 @@ function ldb_pup(name, line, wildcards)
    if list_n ~= nil then
       local n = tonumber(list_n) or 10
       local tier = cached_tier
+      local redo = cached_redos or 0
       local remort = cached_remorts
       if not tier or not remort then
          ColourNote("red", "", PREFIX .. "Current tier/remort unknown. Try again after GMCP data arrives.")
          return
       end
-      local pup_where_clause = string.format("tier = %d AND remort = %d", tier, remort)
-      ColourNote("cyan", "", string.format("%sLast %d powerups (T%d R%d):", PREFIX, n, tier, remort))
+      local pup_where_clause = string.format("tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo))
+      ColourNote("cyan", "", string.format("%sLast %d powerups (%s R%d):", PREFIX, n, format_tier_label(tier, redo), remort))
       render_pup_list(pup_where_clause, n)
       return
    end
@@ -2028,7 +2099,7 @@ function ldb_pup(name, line, wildcards)
 
    -- Try to parse as filter (all, T1, R3, T1R3, etc.)
    if sl == "all" or string.match(sl, "^[tr]%d") then
-      local filter = parse_filter(arg)
+      local filter = parse_args(arg)
       if filter then
          show_pup_overview(filter)
       end
@@ -2039,11 +2110,12 @@ function ldb_pup(name, line, wildcards)
    show_pup_zone_detail(s)
 end
 
-function show_level_stats_section(level, tier, remort, label)
+function show_level_stats_section(level, tier, remort, redo, label)
    -- Build WHERE clause
    local where = string.format("level = %d", level)
    if tier then where = where .. string.format(" AND tier = %d", tier) end
    if remort then where = where .. string.format(" AND remort = %d", remort) end
+   if redo then where = where .. " AND " .. redo_where(redo) end
 
    -- Header
    ColourNote("cyan", "", PREFIX .. "Level " .. level .. " kills " .. label .. ":")
@@ -2056,10 +2128,11 @@ function show_level_stats_section(level, tier, remort, label)
       table.insert(kills, row)
    end
 
-   -- Death count (deaths table has no pup column, filter by level + tier/remort)
+   -- Death count (deaths table has no pup column, filter by level + tier/remort/redo)
    local deaths_where = string.format("level = %d", level)
    if tier then deaths_where = deaths_where .. string.format(" AND tier = %d", tier) end
    if remort then deaths_where = deaths_where .. string.format(" AND remort = %d", remort) end
+   if redo then deaths_where = deaths_where .. " AND " .. redo_where(redo) end
    local total_deaths = 0
    for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths WHERE " .. deaths_where) do
       total_deaths = row.cnt
@@ -2152,12 +2225,16 @@ function show_level_stats(level, _, filter)
    if multi_section then
       -- Build WHERE for combo discovery (exclude NULLs)
       local where = string.format("level = %d AND tier IS NOT NULL AND remort IS NOT NULL", level)
-      if filter.tier then where = where .. string.format(" AND tier = %d", filter.tier) end
+      if filter.tier then
+         where = where .. string.format(" AND tier = %d", filter.tier)
+         local redo = filter.redo or 0
+         where = where .. " AND " .. redo_where(redo)
+      end
 
       local combos = {}
-      for row in db:nrows("SELECT DISTINCT tier, remort FROM kills WHERE " .. where ..
-         " ORDER BY tier, remort") do
-         table.insert(combos, {tier = row.tier, remort = row.remort})
+      for row in db:nrows("SELECT DISTINCT tier, remort, COALESCE(redo, 0) as redo FROM kills WHERE " .. where ..
+         " ORDER BY tier, COALESCE(redo, 0), remort") do
+         table.insert(combos, {tier = row.tier, remort = row.remort, redo = row.redo})
       end
 
       if #combos == 0 then
@@ -2168,12 +2245,15 @@ function show_level_stats(level, _, filter)
 
       for i, combo in ipairs(combos) do
          if i > 1 then Note("") end
-         local label = "(T" .. combo.tier .. " R" .. combo.remort .. ")"
-         show_level_stats_section(level, combo.tier, combo.remort, label)
+         local label = "(" .. format_tier_label(combo.tier, combo.redo) .. " R" .. combo.remort .. ")"
+         show_level_stats_section(level, combo.tier, combo.remort, combo.redo, label)
       end
    else
       -- Single section: resolve tier and remort
       local tier = filter.tier or cached_tier
+      local redo = filter.redo
+      if not filter.tier then redo = cached_redos or 0 end
+      if redo == nil then redo = 0 end
       local remort = filter.remort or cached_remorts
 
       if not tier then
@@ -2185,59 +2265,8 @@ function show_level_stats(level, _, filter)
          return
       end
 
-      local label = "(T" .. tier .. " R" .. remort .. ")"
-      show_level_stats_section(level, tier, remort, label)
-   end
-end
-
--- =============================================================================
--- Helper: parse remort command args - bare number = remort, T<n> = tier
--- Returns {tier=N, remort=N} or {} for defaults, nil on error
--- =============================================================================
-local function parse_remort_args(str)
-   if not str or str == "" then return {} end
-   local s = string.lower(string.match(str, "^%s*(.-)%s*$"))
-   if s == "" then return {} end
-
-   local result = {}
-   local t = string.match(s, "t(%d+)")
-   local r = string.match(s, "r(%d+)")
-   local bare = string.match(s, "^(%d+)$")
-
-   if bare then
-      result.remort = tonumber(bare)
-   else
-      if t then result.tier = tonumber(t) end
-      if r then result.remort = tonumber(r) end
-      if not t and not r then
-         ColourNote("red", "", PREFIX .. "Invalid arguments: " .. str)
-         ColourNote("red", "", PREFIX .. "Use: ldb remort [R] [T<n>]")
-         return nil
-      end
-   end
-   return result
-end
-
--- =============================================================================
--- Helper: parse tier command args - bare number = tier
--- Returns {tier=N} or {} for defaults, nil on error
--- =============================================================================
-local function parse_tier_args(str)
-   if not str or str == "" then return {} end
-   local s = string.lower(string.match(str, "^%s*(.-)%s*$"))
-   if s == "" then return {} end
-
-   local bare = string.match(s, "^(%d+)$")
-   local t = string.match(s, "t(%d+)")
-
-   if bare then
-      return {tier = tonumber(bare)}
-   elseif t then
-      return {tier = tonumber(t)}
-   else
-      ColourNote("red", "", PREFIX .. "Invalid arguments: " .. str)
-      ColourNote("red", "", PREFIX .. "Use: ldb tier [T]")
-      return nil
+      local label = "(" .. format_tier_label(tier, redo) .. " R" .. remort .. ")"
+      show_level_stats_section(level, tier, remort, redo, label)
    end
 end
 
@@ -2245,18 +2274,18 @@ end
 -- Helper: query bracket stats for a given tier + remort
 -- Returns table of bracket results, total kills, total deaths
 -- =============================================================================
-local function query_bracket_stats(tier, remort)
+local function query_bracket_stats(tier, remort, redo)
    local results = {}
    local grand_kills = 0
    local grand_deaths = 0
 
    for _, br in ipairs(BRACKETS) do
       local where_k = string.format(
-         "tier = %d AND remort = %d AND level >= %d AND level <= %d",
-         tier, remort, br.min, br.max)
+         "tier = %d AND remort = %d AND %s AND level >= %d AND level <= %d",
+         tier, remort, redo_where(redo), br.min, br.max)
       local where_d = string.format(
-         "tier = %d AND remort = %d AND level >= %d AND level <= %d",
-         tier, remort, br.min, br.max)
+         "tier = %d AND remort = %d AND %s AND level >= %d AND level <= %d",
+         tier, remort, redo_where(redo), br.min, br.max)
 
       local row_data = {
          label = br.label,
@@ -2372,10 +2401,13 @@ end
 function ldb_remort(name, line, wildcards)
    if not require_db() then return end
 
-   local args = parse_remort_args(wildcards[1])
+   local args = parse_args(wildcards[1])
    if not args then return end
 
    local tier = args.tier or cached_tier
+   local redo = args.redo
+   if not args.tier then redo = cached_redos or 0 end
+   if redo == nil then redo = 0 end
    local remort = args.remort or cached_remorts
 
    if not tier then
@@ -2387,13 +2419,13 @@ function ldb_remort(name, line, wildcards)
       return
    end
 
-   local results, grand_kills, grand_deaths = query_bracket_stats(tier, remort)
+   local results, grand_kills, grand_deaths = query_bracket_stats(tier, remort, redo)
 
    -- Header
    local death_str = grand_deaths > 0 and (", " .. grand_deaths .. " deaths") or ""
    ColourNote("cyan", "", string.format(
-      "%sRemort summary - T%d R%d (%s kills%s):",
-      PREFIX, tier, remort, format_number(grand_kills), death_str))
+      "%sRemort summary - %s R%d (%s kills%s):",
+      PREFIX, format_tier_label(tier, redo), remort, format_number(grand_kills), death_str))
 
    if grand_kills == 0 then
       ColourNote("yellow", "", "  No kills recorded for this remort.")
@@ -2403,8 +2435,8 @@ function ldb_remort(name, line, wildcards)
    render_bracket_table(results, true)
 
    -- Pup section
-   local pup_where_clause = string.format("tier = %d AND remort = %d", tier, remort)
-   local kill_where = string.format("level >= 200 AND tier = %d AND remort = %d", tier, remort)
+   local pup_where_clause = string.format("tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo))
+   local kill_where = string.format("level >= 200 AND tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo))
    -- render_pup_section prints nothing if no pup data exists
    render_pup_section(pup_where_clause, kill_where)
 end
@@ -2415,26 +2447,29 @@ end
 function ldb_tier(name, line, wildcards)
    if not require_db() then return end
 
-   local args = parse_tier_args(wildcards[1])
+   local args = parse_args(wildcards[1], {bare_is_tier = true})
    if not args then return end
 
    local tier = args.tier or cached_tier
+   local redo = args.redo
+   if not args.tier then redo = cached_redos or 0 end
+   if redo == nil then redo = 0 end
 
    if not tier then
       ColourNote("red", "", PREFIX .. "Current tier unknown. Try again after GMCP data arrives.")
       return
    end
 
-   -- Find all remorts for this tier
+   -- Find all remorts for this tier+redo
    local remorts = {}
    for row in db:nrows(string.format(
-      "SELECT DISTINCT remort FROM kills WHERE tier = %d AND remort IS NOT NULL " ..
-      "ORDER BY remort", tier)) do
+      "SELECT DISTINCT remort FROM kills WHERE tier = %d AND %s AND remort IS NOT NULL " ..
+      "ORDER BY remort", tier, redo_where(redo))) do
       table.insert(remorts, row.remort)
    end
 
    if #remorts == 0 then
-      ColourNote("cyan", "", string.format("%sTier summary - T%d:", PREFIX, tier))
+      ColourNote("cyan", "", string.format("%sTier summary - %s:", PREFIX, format_tier_label(tier, redo)))
       ColourNote("yellow", "", "  No kills recorded for this tier.")
       return
    end
@@ -2443,23 +2478,23 @@ function ldb_tier(name, line, wildcards)
    local tier_kills = 0
    local tier_deaths = 0
    for row in db:nrows(string.format(
-      "SELECT COUNT(*) as cnt FROM kills WHERE tier = %d AND remort IS NOT NULL", tier)) do
+      "SELECT COUNT(*) as cnt FROM kills WHERE tier = %d AND %s AND remort IS NOT NULL", tier, redo_where(redo))) do
       tier_kills = row.cnt
    end
    for row in db:nrows(string.format(
-      "SELECT COUNT(*) as cnt FROM deaths WHERE tier = %d AND remort IS NOT NULL", tier)) do
+      "SELECT COUNT(*) as cnt FROM deaths WHERE tier = %d AND %s AND remort IS NOT NULL", tier, redo_where(redo))) do
       tier_deaths = row.cnt
    end
 
    local death_str = tier_deaths > 0 and (", " .. tier_deaths .. " deaths") or ""
    ColourNote("cyan", "", string.format(
-      "%sTier summary - T%d (%d remorts, %s kills%s):",
-      PREFIX, tier, #remorts, format_number(tier_kills), death_str))
+      "%sTier summary - %s (%d remorts, %s kills%s):",
+      PREFIX, format_tier_label(tier, redo), #remorts, format_number(tier_kills), death_str))
 
    -- Query bracket stats for all remorts up front (reuse query_bracket_stats)
    local all_remort_data = {}
    for _, rm in ipairs(remorts) do
-      all_remort_data[rm] = query_bracket_stats(tier, rm)
+      all_remort_data[rm] = query_bracket_stats(tier, rm, redo)
    end
 
    -- For each bracket, show a section with one row per remort
@@ -2529,7 +2564,7 @@ function ldb_tier(name, line, wildcards)
       for row in db:nrows(string.format(
          "SELECT COUNT(*) as cnt, COALESCE(SUM(trains_earned), 0) as trains, " ..
          "AVG(trains_earned) as avg_t " ..
-         "FROM pup_events WHERE tier = %d AND remort = %d", tier, rm)) do
+         "FROM pup_events WHERE tier = %d AND remort = %d AND %s", tier, rm, redo_where(redo))) do
          pup_row.pups = row.cnt
          pup_row.trains = row.trains
          pup_row.trn_pup = row.avg_t
@@ -2541,8 +2576,8 @@ function ldb_tier(name, line, wildcards)
          local total_combat_time = 0
          for row in db:nrows(string.format(
             "SELECT COALESCE(SUM(combat_time), 0) as t FROM kills WHERE level >= 200 " ..
-            "AND tier = %d AND remort = %d AND combat_time IS NOT NULL " ..
-            "AND (mob_level IS NULL OR mob_level > 200)", tier, rm)) do
+            "AND tier = %d AND remort = %d AND %s AND combat_time IS NOT NULL " ..
+            "AND (mob_level IS NULL OR mob_level > 200)", tier, rm, redo_where(redo))) do
             total_combat_time = row.t
          end
          pup_row.avg_time = total_combat_time / pup_row.pups
@@ -2597,11 +2632,14 @@ end
 function ldb_quests(name, line, wildcards)
    if not require_db() then return end
 
-   local filter = parse_filter(wildcards[1])
+   local filter = parse_args(wildcards[1])
    if not filter then return end
 
-   -- Resolve tier/remort
+   -- Resolve tier/remort/redo
    local tier = filter.tier or cached_tier
+   local redo = filter.redo
+   if not filter.tier then redo = cached_redos or 0 end
+   if redo == nil then redo = 0 end
    local remort = filter.remort or cached_remorts
 
    if not filter.all then
@@ -2618,9 +2656,9 @@ function ldb_quests(name, line, wildcards)
    -- Build WHERE clause
    local where = "1=1"
    if not filter.all then
-      where = string.format("tier = %d AND remort = %d", tier, remort)
+      where = string.format("tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo))
    elseif filter.tier then
-      where = string.format("tier = %d", filter.tier)
+      where = string.format("tier = %d AND %s", filter.tier, redo_where(filter.redo or 0))
    end
 
    -- Fetch quests in chronological order (cap at 50)
@@ -2638,7 +2676,7 @@ function ldb_quests(name, line, wildcards)
    end
 
    -- Header
-   local label = filter.all and "all" or ("T" .. tier .. " R" .. remort)
+   local label = filter.all and "all" or (format_tier_label(tier, redo) .. " R" .. remort)
    ColourNote("cyan", "", PREFIX .. "Quests - " .. label .. ":")
 
    if #quests == 0 then
@@ -2748,11 +2786,14 @@ end
 function ldb_campaigns(name, line, wildcards)
    if not require_db() then return end
 
-   local filter = parse_filter(wildcards[1])
+   local filter = parse_args(wildcards[1])
    if not filter then return end
 
-   -- Resolve tier/remort
+   -- Resolve tier/remort/redo
    local tier = filter.tier or cached_tier
+   local redo = filter.redo
+   if not filter.tier then redo = cached_redos or 0 end
+   if redo == nil then redo = 0 end
    local remort = filter.remort or cached_remorts
 
    if not filter.all then
@@ -2769,9 +2810,9 @@ function ldb_campaigns(name, line, wildcards)
    -- Build WHERE clause
    local where = "1=1"
    if not filter.all then
-      where = string.format("tier = %d AND remort = %d", tier, remort)
+      where = string.format("tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo))
    elseif filter.tier then
-      where = string.format("tier = %d", filter.tier)
+      where = string.format("tier = %d AND %s", filter.tier, redo_where(filter.redo or 0))
    end
 
    -- Fetch campaigns in chronological order (cap at 50)
@@ -2789,7 +2830,7 @@ function ldb_campaigns(name, line, wildcards)
    end
 
    -- Header
-   local label = filter.all and "all" or ("T" .. tier .. " R" .. remort)
+   local label = filter.all and "all" or (format_tier_label(tier, redo) .. " R" .. remort)
    ColourNote("cyan", "", PREFIX .. "Campaigns - " .. label .. ":")
 
    if #campaigns == 0 then
@@ -2889,7 +2930,7 @@ function ldb_campaign_show(name, line, wildcards)
    -- Fetch campaign record
    local campaign = nil
    for row in db:nrows(string.format(
-      "SELECT id, timestamp, level, tier, remort, result, duration, mob_count, " ..
+      "SELECT id, timestamp, level, tier, remort, redo, result, duration, mob_count, " ..
       "qp, gold, tp, trains, pracs, expected_qp, expected_gold " ..
       "FROM campaigns WHERE id = %d", cp_id)) do
       campaign = row
@@ -2909,7 +2950,7 @@ function ldb_campaign_show(name, line, wildcards)
    -- Level + tier/remort
    local level_str = tostring(campaign.level)
    if campaign.tier and campaign.remort then
-      level_str = level_str .. " (T" .. campaign.tier .. " R" .. campaign.remort .. ")"
+      level_str = level_str .. " (" .. format_tier_label(campaign.tier, campaign.redo) .. " R" .. campaign.remort .. ")"
    end
    ColourNote("white", "", "  Level:    " .. level_str)
 
@@ -3180,14 +3221,14 @@ function ldb_deaths(name, line, wildcards)
 
    local count = 0
    for row in db:nrows(string.format(
-      "SELECT timestamp, mob_name, zone, level, tier, remort FROM deaths " ..
+      "SELECT timestamp, mob_name, zone, level, tier, remort, redo FROM deaths " ..
       "ORDER BY timestamp DESC LIMIT %d", limit)) do
       count = count + 1
       local time_str = os.date("%Y-%m-%d %H:%M", row.timestamp)
       local mob = (row.mob_name and row.mob_name ~= "") and row.mob_name or "unknown"
       local tr = ""
       if row.tier and row.remort then
-         tr = string.format(" [T%dR%d]", row.tier, row.remort)
+         tr = " [" .. format_tier_label(row.tier, row.redo) .. "R" .. row.remort .. "]"
       end
       ColourNote("white", "", string.format("  %s - Lvl %-3d - %-25s (%s)%s",
          time_str, row.level, mob, row.zone, tr))
@@ -3252,6 +3293,7 @@ function OnPluginInstall()
       if base.perlevel then cached_perlevel = tonumber(base.perlevel) or 1000 end
       if base.tier then cached_tier = tonumber(base.tier) end
       if base.remorts then cached_remorts = tonumber(base.remorts) end
+      if base.redos then cached_redos = tonumber(base.redos) end
       if base.pups then cached_pups = tonumber(base.pups) end
    end
    last_pup_event_id = nil  -- Clear stale pup train tracking on reload

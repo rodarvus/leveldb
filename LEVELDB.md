@@ -5,7 +5,7 @@ Last Updated: 2026-04-01
 Plugin File: leveldb.xml
 Plugin ID: b34c04e52c6c7bced4508230
 Author: Rodarvus
-Current Version: 7.0
+Current Version: 8.0
 
 ================================================================================
 OVERVIEW
@@ -23,9 +23,11 @@ Key Features:
 - Quest tracking: target, area, room, timer, result, rewards (QP/gold/TP/trains/pracs)
 - Campaign tracking: mob list, result, rewards, expected rewards from cp info
 - Powerup tracking: pup events with trains earned, per-area productivity stats
-- Tier and remort tracked as columns in every record
-- Tier/remort filtering: level/this/last/pup/quest/cp commands default to current
-  tier+remort, with optional filters (all, T1 R5, R4, T1)
+- Tier, redo, and remort tracked as columns in every record
+- Tier/redo/remort filtering: level/this/last/pup/quest/cp commands default to
+  current tier+redo+remort, with optional filters (all, T1 R5, T9+3, R4, T1)
+- Redo support: after T9R7, players redo (T9R1+1, T9R2+1, etc.). Redo is tracked
+  as a dimension alongside tier/remort. Hidden in display when 0.
 - Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200) with
   avg XP, damage, level gap, rounds, zones, deaths. Separate powerup section
   with trains, combat time, and per-area productivity.
@@ -137,12 +139,14 @@ Schema:
     pup          INTEGER               -- char.base.pups (nullable; set at 200+)
     mob_level    INTEGER               -- estimated from sacrifice gold * 2 (nullable)
     combat_time  REAL                  -- seconds of active combat (utils.timer() delta, nullable)
+    redo         INTEGER               -- char.base.redos (nullable; 0 for pre-redo players)
 
   pup_events:
     id           INTEGER PRIMARY KEY AUTOINCREMENT  -- sequential, used as pup ID
     timestamp    INTEGER NOT NULL      -- os.time() when powerup occurred
     tier         INTEGER NOT NULL       -- char.base.tier
     remort       INTEGER NOT NULL       -- char.base.remorts
+    redo         INTEGER               -- char.base.redos (nullable)
     pup_number   INTEGER NOT NULL       -- powerup count after this event
     zone         TEXT                   -- zone where powerup occurred (nullable)
     trains_earned INTEGER              -- trains awarded for this powerup (nullable)
@@ -158,6 +162,7 @@ Schema:
     level        INTEGER NOT NULL       -- player level at death
     tier         INTEGER               -- char.base.tier (nullable)
     remort       INTEGER               -- char.base.remorts (nullable)
+    redo         INTEGER               -- char.base.redos (nullable)
 
   quests:
     id           INTEGER PRIMARY KEY AUTOINCREMENT
@@ -165,6 +170,7 @@ Schema:
     level        INTEGER NOT NULL       -- player level when quest started
     tier         INTEGER               -- char.base.tier (nullable)
     remort       INTEGER               -- char.base.remorts (nullable)
+    redo         INTEGER               -- char.base.redos (nullable)
     mob_name     TEXT                   -- target mob name from GMCP (nullable)
     area         TEXT                   -- target area from GMCP (nullable)
     room         TEXT                   -- target room from GMCP (nullable)
@@ -183,6 +189,7 @@ Schema:
     level        INTEGER NOT NULL       -- player level when campaign started
     tier         INTEGER               -- char.base.tier (nullable)
     remort       INTEGER               -- char.base.remorts (nullable)
+    redo         INTEGER               -- char.base.redos (nullable)
     result       TEXT                   -- completed/quit/unknown (nullable while active)
     duration     INTEGER               -- seconds from start to completion (nullable while active)
     mob_count    INTEGER               -- number of mobs assigned (nullable)
@@ -591,6 +598,8 @@ Schema Migrations:
   - v5.0 -> v6.0: ALTER TABLE campaigns ADD COLUMN expected_qp INTEGER
                    ALTER TABLE campaigns ADD COLUMN expected_gold INTEGER
   - v6.0 -> v7.0: ALTER TABLE kills ADD COLUMN combat_time REAL
+  - v7.0 -> v8.0: ALTER TABLE kills/deaths/quests/campaigns/pup_events
+                   ADD COLUMN redo INTEGER
   Errors from "duplicate column name" are silently ignored. Old records retain
   NULL for new columns.
 
@@ -709,6 +718,16 @@ Documentation:
 ================================================================================
 VERSION HISTORY
 ================================================================================
+
+v8.0 (2026-04-01):
+  - Redo support: redo column added to all 5 data tables
+  - Redo tracked as dimension alongside tier/remort in all records
+  - Unified parse_args() replaces parse_filter/parse_remort_args/parse_tier_args
+  - Filter syntax extended: T9+3 R5 (tier 9, redo 3, remort 5)
+  - Display hides +0 for redo (T2 R5, not T2+0 R5)
+  - All queries filter by COALESCE(redo, 0) for backward compatibility
+  - format_tier_label() and redo_where() helpers
+  - ldb status shows redo when > 0
 
 v7.0 (2026-04-01):
   - Powerup module redesign: productivity-focused tracking

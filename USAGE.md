@@ -41,13 +41,17 @@ Most commands default to your **current tier and remort**. You can override this
 
 | Filter | Meaning |
 |--------|---------|
-| *(none)* | Current tier + remort |
+| *(none)* | Current tier+redo + remort |
 | `all` | All tiers and remorts (shown as separate sections) |
 | `T1 R5` | Specific tier and remort |
-| `T1` | All remorts within tier 1 |
-| `R4` | Remort 4, current tier |
+| `T9+3 R5` | Tier 9, redo 3, remort 5 |
+| `T9+3` | Tier 9, redo 3, all remorts |
+| `T1` | All remorts within tier 1 (redo 0) |
+| `R4` | Remort 4, current tier+redo |
 
-Examples: `ldb this all`, `ldb level 50 T1 R5`, `ldb quest T2`, `ldb cp all`, `ldb pup all`
+Examples: `ldb this all`, `ldb level 50 T1 R5`, `ldb quest T2`, `ldb pup T9+3`, `ldb cp all`
+
+Redo is hidden in display when 0 (e.g., `T2 R5` not `T2+0 R5`).
 
 ---
 
