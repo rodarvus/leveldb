@@ -366,7 +366,7 @@
    <!-- cp info: catch-all gag for header/metadata/other lines -->
    <trigger
       name="trg_ldb_cpinfo_gag"
-      match="^(?:-+\[|Complete By|Time Left|Training Session|The targets for|Use 'cp check'|$)"
+      match="^(?:-+\[|Complete By|Time Left|Training Session|Practice|The targets for|Use 'cp check'|$)"
       enabled="n"
       regexp="y"
       keep_evaluating="y"
