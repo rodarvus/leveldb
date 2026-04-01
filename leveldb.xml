@@ -1822,17 +1822,18 @@ local function render_pup_list(pup_where_clause, limit)
 
    if #pups == 0 then return end
 
-   local fmt = "  %5s  %-7s  %5s  %-16s  %6s"
-   ColourNote("cyan", "", string.format(fmt, "ID", "T/R", "Pup#", "Zone", "Trains"))
-   ColourNote("cyan", "", string.format(fmt, "-----", "-------", "-----", "----------------", "------"))
+   local fmt = "  %5s  %-16s  %-7s  %5s  %-16s  %6s"
+   ColourNote("cyan", "", string.format(fmt, "ID", "When", "T/R", "Pup#", "Zone", "Trains"))
+   ColourNote("cyan", "", string.format(fmt, "-----", "----------------", "-------", "-----", "----------------", "------"))
 
    for _, p in ipairs(pups) do
       local tr_label = format_tier_label(p.tier, p.redo) .. "R" .. p.remort
       local zone_display = p.zone or "?"
       if #zone_display > 16 then zone_display = string.sub(zone_display, 1, 15) .. "+" end
       local trains_str = p.trains_earned and tostring(p.trains_earned) or "N/A"
+      local when_str = os.date("%Y-%m-%d %H:%M", p.timestamp)
       ColourNote("white", "", string.format(fmt,
-         tostring(p.id), tr_label, tostring(p.pup_number),
+         tostring(p.id), when_str, tr_label, tostring(p.pup_number),
          zone_display, trains_str))
    end
 end
