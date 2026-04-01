@@ -650,6 +650,18 @@
       sequence="89"
    ></trigger>
 
+   <!-- gq info: Training Sessions -->
+   <trigger
+      name="trg_ldb_gqinfo_trains"
+      match="^Training Sessions?\.+:\s*\[\s*(\d+)\s*\]"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_trains"
+      sequence="89"
+   ></trigger>
+
    <!-- gq info: catch-all gag for header/metadata lines -->
    <trigger
       name="trg_ldb_gqinfo_gag"
@@ -803,6 +815,7 @@ local gqinfo_gold = nil            -- gold from gq info
 local gqinfo_gq_number = nil       -- gq number from gq info (for reconnect matching)
 local gqinfo_status = nil          -- Quest Status from gq info (Preparing/Active/Running/Extended/Finished)
 local gqinfo_pracs = nil           -- Practice Sessions from gq info
+local gqinfo_trains = nil          -- Training Sessions from gq info
 
 -- =============================================================================
 -- Combat tracking state
@@ -1752,6 +1765,7 @@ local function enable_gqinfo_parsing()
    gqinfo_qp = nil
    gqinfo_gold = nil
    gqinfo_pracs = nil
+   gqinfo_trains = nil
    gqinfo_gq_number = nil
    gqinfo_status = nil
    EnableTrigger("trg_ldb_gqinfo_none", true)
@@ -1762,6 +1776,7 @@ local function enable_gqinfo_parsing()
    EnableTrigger("trg_ldb_gqinfo_qp", true)
    EnableTrigger("trg_ldb_gqinfo_gold", true)
    EnableTrigger("trg_ldb_gqinfo_pracs", true)
+   EnableTrigger("trg_ldb_gqinfo_trains", true)
    EnableTrigger("trg_ldb_gqinfo_gag", true)
    EnableTrigger("trg_ldb_gqinfo_end", true)
 end
@@ -1775,6 +1790,7 @@ local function disable_gqinfo_parsing()
    EnableTrigger("trg_ldb_gqinfo_qp", false)
    EnableTrigger("trg_ldb_gqinfo_gold", false)
    EnableTrigger("trg_ldb_gqinfo_pracs", false)
+   EnableTrigger("trg_ldb_gqinfo_trains", false)
    EnableTrigger("trg_ldb_gqinfo_gag", false)
    EnableTrigger("trg_ldb_gqinfo_end", false)
 end
@@ -2039,6 +2055,10 @@ end
 
 function ldb_on_gqinfo_pracs(name, line, wildcards)
    gqinfo_pracs = tonumber(wildcards[1])
+end
+
+function ldb_on_gqinfo_trains(name, line, wildcards)
+   gqinfo_trains = tonumber(wildcards[1])
 end
 
 function ldb_on_gqinfo_gag(name, line, wildcards)
