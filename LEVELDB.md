@@ -5,7 +5,7 @@ Last Updated: 2026-04-01
 Plugin File: leveldb.xml
 Plugin ID: b34c04e52c6c7bced4508230
 Author: Rodarvus
-Current Version: 8.0
+Current Version: 9.0
 
 ================================================================================
 OVERVIEW
@@ -23,6 +23,8 @@ Key Features:
 - Quest tracking: target, area, room, timer, result, rewards (QP/gold/TP/trains/pracs)
 - Campaign tracking: mob list, result, rewards, expected rewards from cp info
 - Powerup tracking: pup events with trains earned, per-area productivity stats
+- Global quest tracking: join/won/completed/expired/cancelled/quit, mob list,
+  per-mob QP, base and win rewards
 - Tier, redo, and remort tracked as columns in every record
 - Tier/redo/remort filtering: level/this/last/pup/quest/cp commands default to
   current tier+redo+remort, with optional filters (all, T1 R5, T9+3, R4, T1)
@@ -109,6 +111,21 @@ QUERIES (QUESTS/CAMPAIGNS):
                             Shows: timestamp, level (T/R), result (colored),
                             mob count, rewards (actual or expected), full mob list
                             Also: ldb cps show, ldb campaign show, ldb campaigns show
+
+QUERIES (GLOBAL QUESTS):
+  ldb gq [filter]         - Global quest history table (default: current tier & remort)
+                            Shows: ID, Lvl, Mobs, QP, Gold, TP, Time
+                            Colored suffixes: active (green), won (cyan),
+                            expired/cancelled/quit (red)
+                            Summary with win count, avg QP, avg time
+                            Filter options: same as quest/campaign commands
+                            Also: ldb gquest, ldb gquests
+
+  ldb gq show <id>        - Detailed view of a specific global quest by database ID
+                            Shows: timestamp, level (T/R), GQ number, result (colored),
+                            mob count, rewards (actual or expected), full mob list
+                            with kill counts for multi-target mobs
+                            Also: ldb gquest show, ldb gquests show
 
 DATABASE:
   ldb db                  - Database file info: path, size, record counts
@@ -207,6 +224,32 @@ Schema:
     mob_name     TEXT NOT NULL          -- mob name from cp info output
     area         TEXT                   -- area name from cp info output (nullable)
 
+  gquests:
+    id            INTEGER PRIMARY KEY AUTOINCREMENT
+    timestamp     INTEGER NOT NULL      -- os.time() when joined
+    gq_number     INTEGER               -- global quest number (e.g., 7286)
+    level         INTEGER NOT NULL       -- player level when joined
+    tier          INTEGER               -- char.base.tier (nullable)
+    remort        INTEGER               -- char.base.remorts (nullable)
+    redo          INTEGER               -- char.base.redos (nullable)
+    result        TEXT                   -- NULL (active), won/completed/expired/cancelled/quit/unknown
+    duration      INTEGER               -- seconds from join to finish (nullable)
+    mob_count     INTEGER               -- number of mob lines assigned (nullable)
+    qp            INTEGER               -- total QP (base reward + per-mob kills)
+    gold          INTEGER               -- gold from win reward (nullable)
+    tp            INTEGER               -- trivia points (nullable)
+    trains        INTEGER               -- training sessions (nullable)
+    pracs         INTEGER               -- practices (nullable)
+    expected_qp   INTEGER               -- base QP from gq info (reconnect + display)
+    expected_gold INTEGER               -- gold from gq info (nullable)
+
+  gquest_mobs:
+    id          INTEGER PRIMARY KEY AUTOINCREMENT
+    gquest_id   INTEGER NOT NULL REFERENCES gquests(id)
+    mob_name    TEXT NOT NULL            -- mob name from gq check output
+    area        TEXT                     -- area short name from gq check (nullable)
+    mob_count   INTEGER DEFAULT 1        -- kill count (2 * billows of smoke -> 2)
+
 Indexes:
   idx_kills_level, idx_kills_zone, idx_kills_mob, idx_kills_timestamp
   idx_kills_tier, idx_kills_remort, idx_kills_pup, idx_kills_mob_level
@@ -215,6 +258,8 @@ Indexes:
   idx_campaigns_level, idx_campaigns_tier, idx_campaigns_remort
   idx_campaign_mobs_cid
   idx_pup_events_tier_remort
+  idx_gquests_level, idx_gquests_tier, idx_gquests_remort, idx_gquests_redo
+  idx_gquest_mobs_gqid
 
 Design Decisions:
 - xp_gained = 0 is valid (mobs that yield no XP, fled/interrupted combats).
@@ -513,6 +558,72 @@ Per-Area Productivity (derived, not stored):
   - Est trains per hour = (avg_trains_per_pup / est_time_per_pup) * 3600
 
 ================================================================================
+GLOBAL QUEST (GQ) TRACKING
+================================================================================
+
+Global quests are tracked via text triggers (always-on) and silent gq info/check
+parsing (on-demand), following the same pattern as campaigns.
+
+GQ Lifecycle:
+  1. Player joins GQ -> "You have now joined Global Quest # N."
+     (trg_ldb_gq_join) -> INSERT gquest record, send silent gq info + gq check
+  2. gq info response parsed -> expected QP and gold recorded
+  3. gq check response parsed -> mob list captured (with kill counts)
+  4. Mobs killed -> "Congratulations, that was one of the GLOBAL QUEST mobs!"
+     Per-mob QP captured from "N quest points awarded." (1s gated trigger)
+  5a. Won (first) -> "You were the first to complete this quest!"
+      -> result="won", parse reward lines
+  5b. Completed (not first) -> "You have finished this global quest."
+      -> result="completed", parse reward lines
+  5c. Expired -> "Global quest # N is now over." / "... (extended) is now over."
+      -> result="expired"
+  5d. Cancelled -> "Global quest # N has been cancelled due to lack of activity."
+      -> result="cancelled"
+  5e. Quit -> "You are no longer part of Global Quest # N..."
+      -> result="quit"
+
+Silent gq info Mechanism:
+  SendNoEcho("gq info") parses expected rewards. Eight triggers at seq 89/90/91:
+  - trg_ldb_gqinfo_none/norun: "not in a global quest" / "no global quests running"
+  - trg_ldb_gqinfo_qn: Quest Name -> captures gq_number
+  - trg_ldb_gqinfo_status: Quest Status -> Preparing/Running/Extended/Finished
+  - trg_ldb_gqinfo_qp/gold: captures expected QP and gold
+  - trg_ldb_gqinfo_gag: gags header/metadata lines
+  - trg_ldb_gqinfo_end: closing separator -> triggers gq check
+
+Silent gq check Mechanism:
+  SendNoEcho("gq check") parses mob list. Chained after gq info completes.
+  - trg_ldb_gqcheck_mob: parses "[* N] mob_name - area" lines
+  - trg_ldb_gqcheck_none/norun: "not in a global quest" responses
+  - trg_ldb_gqcheck_gag: gags header/separator lines
+  - End detection: timer-based (1s timeout, reset on each mob line via
+    generation counter to prevent stale timeouts from acting)
+
+Per-mob QP Gating:
+  "N quest points awarded." could fire outside GQ context. The trigger
+  (trg_ldb_gq_mob_qp) is disabled by default. It is enabled for 1 second
+  after trg_ldb_gq_mob_killed fires, then auto-disabled via DoAfterSpecial.
+  Same pattern used by stats_tracker.xml.
+
+GQ Reward Parsing:
+  After "won" or "finished" trigger fires, trg_ldb_gq_reward is enabled for
+  1 second to capture "Reward of N type added." lines. Same format as campaigns.
+  After 1 second, the trigger is disabled and active_gquest_id is cleared.
+
+GQ Reconnect Reconciliation:
+  On plugin load, delayed_gq_info() fires after 3 seconds (staggered after
+  delayed_cp_info at 2 seconds). Sends silent gq info to detect in-progress GQs.
+  - If gq info shows active GQ and gq_number matches saved record -> keep, refresh
+  - If gq_number doesn't match -> close old as "unknown", create new
+  - If no saved record -> create new record
+  - If "not in a gquest" -> close any saved record as "unknown"
+  - If status is "Finished" -> close any saved record as "unknown"
+
+State Persistence:
+  active_gquest_id saved/restored via SetVariable/GetVariable alongside
+  active_quest_id and active_campaign_id.
+
+================================================================================
 GMCP BROADCASTS HANDLED
 ================================================================================
 
@@ -565,8 +676,9 @@ OnPluginDisconnect:
   - End any active combat tracking (prevents stale state on reconnect)
 
 State Persistence:
-  save_state="y" with three variables: enabled (boolean),
-  active_quest_id (number or ""), active_campaign_id (number or "")
+  save_state="y" with four variables: enabled (boolean),
+  active_quest_id (number or ""), active_campaign_id (number or ""),
+  active_gquest_id (number or "")
 
 ================================================================================
 DATABASE OPERATIONS
@@ -600,6 +712,8 @@ Schema Migrations:
   - v6.0 -> v7.0: ALTER TABLE kills ADD COLUMN combat_time REAL
   - v7.0 -> v8.0: ALTER TABLE kills/deaths/quests/campaigns/pup_events
                    ADD COLUMN redo INTEGER
+  - v8.0 -> v9.0: New tables gquests and gquest_mobs (CREATE TABLE IF NOT EXISTS,
+                   no ALTER TABLE migrations needed)
   Errors from "duplicate column name" are silently ignored. Old records retain
   NULL for new columns.
 
@@ -655,9 +769,10 @@ PLUGIN COEXISTENCE
 ================================================================================
 
 LevelDB is mostly passive -- it primarily observes GMCP broadcasts and text output.
-The one exception is campaign tracking, where it sends "cp info" to the MUD via
-SendNoEcho() (command not echoed to the user). This occurs at most twice per
-campaign: once at campaign start, and once on plugin load if a campaign is active.
+The exceptions are campaign tracking (sends "cp info") and global quest tracking
+(sends "gq info" and "gq check") via SendNoEcho() (commands not echoed to user).
+These occur at most twice per campaign/gquest: once at start, and once on plugin
+load if an activity is in progress.
 
 Compatibility notes:
 - stats_tracker: Both track XP via TNL delta; independent databases
@@ -666,6 +781,12 @@ Compatibility notes:
 - WinkleGold_Mapper_Extender: Uses cp info (not cp check) to avoid triggering
   WinkleGold's cp check parsing triggers, which would error on unexpected input.
   cp info output is not parsed by any known community plugin.
+- Search_and_Destroy (Crowley): Both listen for GQ triggers. LevelDB uses
+  keep_evaluating="y" so S&D triggers still fire. Silent gq info/check is sent
+  only on join and reconnect, unlikely to overlap with S&D's user-initiated parsing.
+- GQ_List.xml: Only parses "gq list" output. No conflict with gq info/check.
+- stats_tracker.xml: Both track GQ wins/completions. stats_tracker uses aggregate
+  counters; LevelDB records per-event detail. Independent, no conflict.
 - NPC_Info, WingleGold_Spellup, or any other plugin: No known conflicts
 
 ================================================================================
@@ -718,6 +839,18 @@ Documentation:
 ================================================================================
 VERSION HISTORY
 ================================================================================
+
+v9.0 (2026-04-01):
+  - Global Quest (GQ) tracking: full lifecycle (join/won/completed/expired/cancelled/quit)
+  - New tables: gquests (17 columns), gquest_mobs (5 columns with mob_count)
+  - Mob list captured from silent gq check parsing (timer-based end detection)
+  - Expected rewards from silent gq info parsing (QP, gold)
+  - Per-mob QP accumulated from "N quest points awarded" (1s gated trigger)
+  - Win/completion rewards parsed from "Reward of..." lines
+  - Reconnect reconciliation via delayed_gq_info() at 3s after plugin load
+  - New commands: ldb gq [filter], ldb gq show <id>
+  - ldb status and ldb db show gquest counts
+  - Compatible with stats_tracker, Search_and_Destroy, GQ_List plugins
 
 v8.0 (2026-04-01):
   - Redo support: redo column added to all 5 data tables
@@ -787,7 +920,6 @@ FUTURE CONSIDERATIONS
 - Session tracking / XP-per-hour calculation
 - Miniwindow / real-time display
 - Item loot tracking
-- GQ (Global Quest) tracking
 - Spell-per-kill tracking
 - Data export (CSV/JSON)
 - Level time estimation

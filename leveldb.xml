@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="8.0"
+   version="9.0"
    save_state="y"
    >
 
@@ -153,6 +153,20 @@
       regexp="y"
       sequence="100"
       script="ldb_pup"
+   ></alias>
+   <alias
+      match="^ldb gq(?:uest)?s? show (\d+)$"
+      enabled="y"
+      regexp="y"
+      sequence="99"
+      script="ldb_gquest_show"
+   ></alias>
+   <alias
+      match="^ldb gq(?:uest)?s?(?: (.+))?$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_gquests"
    ></alias>
    <alias
       match="^ldb db$"
@@ -402,6 +416,291 @@
       script="ldb_on_cp_reward_end"
       sequence="90"
    ></trigger>
+
+   <!-- ============================================================ -->
+   <!-- Global Quest triggers (always-on, don't gag)                 -->
+   <!-- ============================================================ -->
+
+   <!-- GQ join -->
+   <trigger
+      name="trg_ldb_gq_join"
+      match="^You have now joined Global Quest # (\d+)\."
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_join"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ mob killed -->
+   <trigger
+      name="trg_ldb_gq_mob_killed"
+      match="^Congratulations, that was one of the GLOBAL QUEST mobs!$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_mob_killed"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ per-mob QP reward (disabled, enabled for 1s after mob kill) -->
+   <trigger
+      name="trg_ldb_gq_mob_qp"
+      match="^(\d+) quest points? awarded\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_mob_qp"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ won (first to complete) -->
+   <trigger
+      name="trg_ldb_gq_won"
+      match="^You were the first to complete this quest!$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_won"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ finished (completed but not first, during extended mode) -->
+   <trigger
+      name="trg_ldb_gq_finished"
+      match="^You have finished this global quest\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_finished"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ ended (expired/over) -->
+   <trigger
+      name="trg_ldb_gq_ended"
+      match="^Global Quest: Global quest # (\d+)(?: \(extended\))? is now over\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_ended"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ cancelled -->
+   <trigger
+      name="trg_ldb_gq_cancelled"
+      match="^Global Quest: Global quest # (\d+) has been cancelled due to lack of activity\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_cancelled"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ quit -->
+   <trigger
+      name="trg_ldb_gq_quit"
+      match="^You are no longer part of Global Quest # (\d+) and will be unable to rejoin\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_quit"
+      sequence="100"
+   ></trigger>
+
+   <!-- GQ not in (two patterns, same handler) -->
+   <trigger
+      name="trg_ldb_gq_not_in_1"
+      match="^You are not in a global quest\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_not_in"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_gq_not_in_2"
+      match="^There are no global quests running\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_not_in"
+      sequence="100"
+   ></trigger>
+
+   <!-- ============================================================ -->
+   <!-- GQ reward parsing triggers (disabled, don't gag)             -->
+   <!-- ============================================================ -->
+
+   <trigger
+      name="trg_ldb_gq_reward"
+      match="^\s*Reward of ([\d,]+) (.+) added\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gq_reward"
+      sequence="100"
+   ></trigger>
+
+   <!-- ============================================================ -->
+   <!-- Silent gq info parsing triggers (disabled, gag output)       -->
+   <!-- ============================================================ -->
+
+   <!-- No active gquest responses -->
+   <trigger
+      name="trg_ldb_gqinfo_none"
+      match="^You are not in a global quest\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_none"
+      sequence="89"
+   ></trigger>
+   <trigger
+      name="trg_ldb_gqinfo_norun"
+      match="^There are no global quests running\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_none"
+      sequence="89"
+   ></trigger>
+
+   <!-- gq info: Quest Name (captures gq number) -->
+   <trigger
+      name="trg_ldb_gqinfo_qn"
+      match="^Quest Name\.+:\s*\[\s*Global quest # (\d+)\s*\]"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_qn"
+      sequence="89"
+   ></trigger>
+
+   <!-- gq info: Quest Status -->
+   <trigger
+      name="trg_ldb_gqinfo_status"
+      match="^Quest Status\.+:\s*\[\s*(\w+)\s*\]"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_status"
+      sequence="89"
+   ></trigger>
+
+   <!-- gq info: Quest Points -->
+   <trigger
+      name="trg_ldb_gqinfo_qp"
+      match="^Quest points\.+:\s*\[\s*(\d+)\s*\]"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_qp"
+      sequence="89"
+   ></trigger>
+
+   <!-- gq info: Gold Coins -->
+   <trigger
+      name="trg_ldb_gqinfo_gold"
+      match="^Gold Coins\.+:\s*\[\s*([\d,]+)\s*\]"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_gold"
+      sequence="89"
+   ></trigger>
+
+   <!-- gq info: catch-all gag for header/metadata lines -->
+   <trigger
+      name="trg_ldb_gqinfo_gag"
+      match="^(?:-+\[|Quest (?:Name|Type|Status|Duration)|Level range|Time to Start|Kill at least)"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_gag"
+      sequence="90"
+   ></trigger>
+
+   <!-- gq info: closing separator (end of gq info output) -->
+   <trigger
+      name="trg_ldb_gqinfo_end"
+      match="^-{20,}$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_end"
+      sequence="91"
+   ></trigger>
+
+   <!-- ============================================================ -->
+   <!-- Silent gq check parsing triggers (disabled, gag output)      -->
+   <!-- ============================================================ -->
+
+   <!-- gq check: mob line -->
+   <trigger
+      name="trg_ldb_gqcheck_mob"
+      match="^\[\*?\s*\d+\]\s+(?:(\d+) \* )?(.+?)\s+-\s+(\w+)\s*$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqcheck_mob"
+      sequence="89"
+   ></trigger>
+
+   <!-- gq check: not in gquest -->
+   <trigger
+      name="trg_ldb_gqcheck_none"
+      match="^You are not in a global quest\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqcheck_none"
+      sequence="89"
+   ></trigger>
+   <trigger
+      name="trg_ldb_gqcheck_norun"
+      match="^There are no global quests running\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqcheck_none"
+      sequence="89"
+   ></trigger>
+
+   <!-- gq check: header/separator gag -->
+   <trigger
+      name="trg_ldb_gqcheck_gag"
+      match="^(?:Index\s+Target|-{20,})"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqcheck_gag"
+      sequence="90"
+   ></trigger>
 </triggers>
 
 
@@ -456,6 +755,16 @@ local cpinfo_mob_buffer = {}       -- temp buffer for mob list during cp info pa
 local cpinfo_level = nil           -- Level Taken from cp info (for matching)
 local cpinfo_qp = nil              -- Quest Points from cp info (for matching)
 local cpinfo_gold = nil            -- Gold Coins from cp info
+
+-- =============================================================================
+-- Global Quest tracking state
+-- =============================================================================
+local active_gquest_id = nil       -- DB id of open gquest (nil if none)
+local gqinfo_mob_buffer = {}       -- temp buffer for mob list during gq check parse
+local gqinfo_qp = nil              -- base QP from gq info
+local gqinfo_gold = nil            -- gold from gq info
+local gqinfo_gq_number = nil       -- gq number from gq info (for reconnect matching)
+local gqinfo_status = nil          -- Quest Status from gq info (Preparing/Running/Extended/Finished)
 
 -- =============================================================================
 -- Combat tracking state
@@ -577,6 +886,34 @@ local function init_tables()
          trains_earned INTEGER,
          xp_per_level INTEGER
       );
+
+      CREATE TABLE IF NOT EXISTS gquests (
+         id            INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp     INTEGER NOT NULL,
+         gq_number     INTEGER,
+         level         INTEGER NOT NULL,
+         tier          INTEGER,
+         remort        INTEGER,
+         redo          INTEGER,
+         result        TEXT,
+         duration      INTEGER,
+         mob_count     INTEGER,
+         qp            INTEGER,
+         gold          INTEGER,
+         tp            INTEGER,
+         trains        INTEGER,
+         pracs         INTEGER,
+         expected_qp   INTEGER,
+         expected_gold INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS gquest_mobs (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         gquest_id   INTEGER NOT NULL REFERENCES gquests(id),
+         mob_name    TEXT NOT NULL,
+         area        TEXT,
+         mob_count   INTEGER DEFAULT 1
+      );
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_tables")
@@ -628,6 +965,11 @@ local function init_indexes()
       CREATE INDEX IF NOT EXISTS idx_quests_redo ON quests(redo);
       CREATE INDEX IF NOT EXISTS idx_campaigns_redo ON campaigns(redo);
       CREATE INDEX IF NOT EXISTS idx_pup_events_redo ON pup_events(redo);
+      CREATE INDEX IF NOT EXISTS idx_gquests_level ON gquests(level);
+      CREATE INDEX IF NOT EXISTS idx_gquests_tier ON gquests(tier);
+      CREATE INDEX IF NOT EXISTS idx_gquests_remort ON gquests(remort);
+      CREATE INDEX IF NOT EXISTS idx_gquests_redo ON gquests(redo);
+      CREATE INDEX IF NOT EXISTS idx_gquest_mobs_gqid ON gquest_mobs(gquest_id);
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_indexes")
@@ -994,6 +1336,16 @@ local function close_open_campaign()
    active_campaign_id = nil
 end
 
+local function close_open_gquest()
+   if not active_gquest_id or not db then return end
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE gquests SET result = 'unknown', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_gquest_id))
+   dbcheck(db:errcode(), db:errmsg(), "close_open_gquest")
+   active_gquest_id = nil
+end
+
 -- =============================================================================
 -- Quest/Campaign: cp info silent parsing helpers
 -- =============================================================================
@@ -1356,6 +1708,404 @@ function delayed_cp_info()
 end
 
 -- =============================================================================
+-- Global Quest: silent gq info/check parsing helpers
+-- =============================================================================
+local function enable_gqinfo_parsing()
+   gqinfo_qp = nil
+   gqinfo_gold = nil
+   gqinfo_gq_number = nil
+   gqinfo_status = nil
+   EnableTrigger("trg_ldb_gqinfo_none", true)
+   EnableTrigger("trg_ldb_gqinfo_norun", true)
+   EnableTrigger("trg_ldb_gqinfo_qn", true)
+   EnableTrigger("trg_ldb_gqinfo_status", true)
+   EnableTrigger("trg_ldb_gqinfo_qp", true)
+   EnableTrigger("trg_ldb_gqinfo_gold", true)
+   EnableTrigger("trg_ldb_gqinfo_gag", true)
+   EnableTrigger("trg_ldb_gqinfo_end", true)
+end
+
+local function disable_gqinfo_parsing()
+   EnableTrigger("trg_ldb_gqinfo_none", false)
+   EnableTrigger("trg_ldb_gqinfo_norun", false)
+   EnableTrigger("trg_ldb_gqinfo_qn", false)
+   EnableTrigger("trg_ldb_gqinfo_status", false)
+   EnableTrigger("trg_ldb_gqinfo_qp", false)
+   EnableTrigger("trg_ldb_gqinfo_gold", false)
+   EnableTrigger("trg_ldb_gqinfo_gag", false)
+   EnableTrigger("trg_ldb_gqinfo_end", false)
+end
+
+local gqcheck_generation = 0  -- generation counter to ignore stale timeout callbacks
+
+local function enable_gqcheck_parsing()
+   gqinfo_mob_buffer = {}
+   gqcheck_generation = gqcheck_generation + 1
+   EnableTrigger("trg_ldb_gqcheck_mob", true)
+   EnableTrigger("trg_ldb_gqcheck_none", true)
+   EnableTrigger("trg_ldb_gqcheck_norun", true)
+   EnableTrigger("trg_ldb_gqcheck_gag", true)
+   -- Timer-based end detection (no closing separator in gq check output)
+   -- Each mob line resets the timer by bumping generation and scheduling a new timeout
+   DoAfterSpecial(1, "gqcheck_timeout(" .. gqcheck_generation .. ")", 12)
+end
+
+local function disable_gqcheck_parsing()
+   gqcheck_generation = gqcheck_generation + 1  -- invalidate any pending timeout
+   EnableTrigger("trg_ldb_gqcheck_mob", false)
+   EnableTrigger("trg_ldb_gqcheck_none", false)
+   EnableTrigger("trg_ldb_gqcheck_norun", false)
+   EnableTrigger("trg_ldb_gqcheck_gag", false)
+end
+
+local function send_silent_gq_info()
+   enable_gqinfo_parsing()
+   SendNoEcho("gq info")
+end
+
+local function flush_gqcheck_mob_buffer()
+   if not active_gquest_id or not db then return end
+   if #gqinfo_mob_buffer == 0 then return end
+
+   -- Delete old mobs for this gquest and re-insert
+   db:exec(string.format("DELETE FROM gquest_mobs WHERE gquest_id = %d", active_gquest_id))
+
+   for _, mob in ipairs(gqinfo_mob_buffer) do
+      local query = string.format(
+         "INSERT INTO gquest_mobs (gquest_id, mob_name, area, mob_count) VALUES (%d, %s, %s, %d)",
+         active_gquest_id, fixsql(mob.name), fixsql(mob.area), mob.count or 1)
+      db:exec(query)
+      dbcheck(db:errcode(), db:errmsg(), query)
+   end
+
+   -- Update mob_count and expected rewards on gquest
+   local query = string.format(
+      "UPDATE gquests SET mob_count = (SELECT COUNT(*) FROM gquest_mobs WHERE gquest_id = %d), " ..
+      "expected_qp = %s, expected_gold = %s WHERE id = %d",
+      active_gquest_id,
+      gqinfo_qp and tostring(gqinfo_qp) or "NULL",
+      gqinfo_gold and tostring(gqinfo_gold) or "NULL",
+      active_gquest_id)
+   db:exec(query)
+   dbcheck(db:errcode(), db:errmsg(), query)
+end
+
+-- =============================================================================
+-- Global Quest: text trigger handlers
+-- =============================================================================
+function ldb_on_gq_join(name, line, wildcards)
+   if not db then return end
+   if not enabled then return end
+
+   local gq_num = tonumber(wildcards[1])
+
+   close_open_gquest()
+
+   local query = string.format(
+      "INSERT INTO gquests (timestamp, gq_number, level, tier, remort, redo) " ..
+      "VALUES (%d, %s, %d, %s, %s, %s)",
+      os.time(),
+      gq_num and tostring(gq_num) or "NULL",
+      cached_level or 0,
+      cached_tier and tostring(cached_tier) or "NULL",
+      cached_remorts and tostring(cached_remorts) or "NULL",
+      cached_redos and tostring(cached_redos) or "NULL")
+   db:exec(query)
+   if not dbcheck(db:errcode(), db:errmsg(), query) then
+      active_gquest_id = db:last_insert_rowid()
+   end
+
+   -- Fetch gq info (rewards), then chain gq check (mob list) from gqinfo_end
+   send_silent_gq_info()
+end
+
+function ldb_on_gq_mob_killed(name, line, wildcards)
+   if not active_gquest_id then return end
+   -- Enable per-mob QP capture for 1 second
+   EnableTrigger("trg_ldb_gq_mob_qp", true)
+   DoAfterSpecial(1, 'EnableTrigger("trg_ldb_gq_mob_qp", false)', 12)
+end
+
+function ldb_on_gq_mob_qp(name, line, wildcards)
+   if not active_gquest_id or not db then return end
+   local amount = tonumber(wildcards[1])
+   if not amount then return end
+   db:exec(string.format(
+      "UPDATE gquests SET qp = COALESCE(qp, 0) + %d WHERE id = %d",
+      amount, active_gquest_id))
+end
+
+function ldb_on_gq_won(name, line, wildcards)
+   if not db then return end
+   if not active_gquest_id then return end
+
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE gquests SET result = 'won', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_gquest_id))
+   dbcheck(db:errcode(), db:errmsg(), "gq_won")
+
+   -- Enable reward parsing for 1 second
+   EnableTrigger("trg_ldb_gq_reward", true)
+   DoAfterSpecial(1, 'EnableTrigger("trg_ldb_gq_reward", false); active_gquest_id = nil', 12)
+end
+
+function ldb_on_gq_finished(name, line, wildcards)
+   if not db then return end
+   if not active_gquest_id then return end
+
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE gquests SET result = 'completed', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_gquest_id))
+   dbcheck(db:errcode(), db:errmsg(), "gq_finished")
+
+   -- Enable reward parsing for 1 second (may or may not fire)
+   EnableTrigger("trg_ldb_gq_reward", true)
+   DoAfterSpecial(1, 'EnableTrigger("trg_ldb_gq_reward", false); active_gquest_id = nil', 12)
+end
+
+function ldb_on_gq_ended(name, line, wildcards)
+   if not db then return end
+   if not active_gquest_id then return end
+
+   -- Only act if gq_number matches our active gquest
+   local gq_num = tonumber(wildcards[1])
+   if gq_num then
+      local saved_gq_num = nil
+      for row in db:nrows(string.format(
+         "SELECT gq_number FROM gquests WHERE id = %d", active_gquest_id)) do
+         saved_gq_num = row.gq_number
+      end
+      if saved_gq_num and saved_gq_num ~= gq_num then return end
+   end
+
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE gquests SET result = 'expired', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_gquest_id))
+   dbcheck(db:errcode(), db:errmsg(), "gq_ended")
+   active_gquest_id = nil
+end
+
+function ldb_on_gq_cancelled(name, line, wildcards)
+   if not db then return end
+   if not active_gquest_id then return end
+
+   local gq_num = tonumber(wildcards[1])
+   if gq_num then
+      local saved_gq_num = nil
+      for row in db:nrows(string.format(
+         "SELECT gq_number FROM gquests WHERE id = %d", active_gquest_id)) do
+         saved_gq_num = row.gq_number
+      end
+      if saved_gq_num and saved_gq_num ~= gq_num then return end
+   end
+
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE gquests SET result = 'cancelled', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_gquest_id))
+   dbcheck(db:errcode(), db:errmsg(), "gq_cancelled")
+   active_gquest_id = nil
+end
+
+function ldb_on_gq_quit(name, line, wildcards)
+   if not db then return end
+   if not active_gquest_id then return end
+
+   local now = os.time()
+   db:exec(string.format(
+      "UPDATE gquests SET result = 'quit', duration = %d - timestamp WHERE id = %d AND result IS NULL",
+      now, active_gquest_id))
+   dbcheck(db:errcode(), db:errmsg(), "gq_quit")
+   active_gquest_id = nil
+end
+
+function ldb_on_gq_not_in(name, line, wildcards)
+   -- Only close if we think we're in a gquest
+   if active_gquest_id then
+      close_open_gquest()
+   end
+end
+
+-- =============================================================================
+-- Global Quest: reward parsing handler
+-- =============================================================================
+function ldb_on_gq_reward(name, line, wildcards)
+   if not active_gquest_id or not db then return end
+
+   local amount_str = wildcards[1]
+   local rtype = wildcards[2]
+   if not amount_str or not rtype then return end
+
+   local amount = tonumber((string.gsub(amount_str, ",", "")))
+   if not amount then return end
+
+   local field = nil
+   if string.find(rtype, "quest point") then field = "qp"
+   elseif string.find(rtype, "gold coin") then field = "gold"
+   elseif string.find(rtype, "trivia point") then field = "tp"
+   elseif string.find(rtype, "training session") then field = "trains"
+   elseif string.find(rtype, "practice") then field = "pracs"
+   end
+
+   if field then
+      db:exec(string.format(
+         "UPDATE gquests SET %s = COALESCE(%s, 0) + %d WHERE id = %d",
+         field, field, amount, active_gquest_id))
+      dbcheck(db:errcode(), db:errmsg(), "gq_reward " .. field)
+   end
+end
+
+-- =============================================================================
+-- Global Quest: silent gq info parsing handlers
+-- =============================================================================
+function ldb_on_gqinfo_none(name, line, wildcards)
+   disable_gqinfo_parsing()
+   close_open_gquest()
+end
+
+function ldb_on_gqinfo_qn(name, line, wildcards)
+   gqinfo_gq_number = tonumber(wildcards[1])
+end
+
+function ldb_on_gqinfo_status(name, line, wildcards)
+   gqinfo_status = wildcards[1]
+end
+
+function ldb_on_gqinfo_qp(name, line, wildcards)
+   gqinfo_qp = tonumber(wildcards[1])
+end
+
+function ldb_on_gqinfo_gold(name, line, wildcards)
+   local gold_str = wildcards[1]
+   if gold_str then
+      gqinfo_gold = tonumber((string.gsub(gold_str, ",", "")))
+   end
+end
+
+function ldb_on_gqinfo_gag(name, line, wildcards)
+   -- No-op handler for gagged gq info lines
+end
+
+function ldb_on_gqinfo_end(name, line, wildcards)
+   -- Closing separator: end of gq info output
+   disable_gqinfo_parsing()
+
+   -- Guard: if no gq info data was parsed, this is a stray separator (e.g.,
+   -- from campaign reward output). Ignore it.
+   if not gqinfo_gq_number and not gqinfo_qp and not gqinfo_status then return end
+
+   -- If gquest is Finished, don't parse mob list
+   if gqinfo_status == "Finished" then
+      close_open_gquest()
+      return
+   end
+
+   if not db or not enabled then return end
+
+   -- Update gq_number on existing record if we have one
+   if active_gquest_id and gqinfo_gq_number then
+      db:exec(string.format(
+         "UPDATE gquests SET gq_number = %d WHERE id = %d",
+         gqinfo_gq_number, active_gquest_id))
+   end
+
+   -- Reconnect scenario: gq info shows an active gquest but we have no record
+   if not active_gquest_id and gqinfo_gq_number then
+      local query = string.format(
+         "INSERT INTO gquests (timestamp, gq_number, level, tier, remort, redo) " ..
+         "VALUES (%d, %d, %d, %s, %s, %s)",
+         os.time(),
+         gqinfo_gq_number,
+         cached_level or 0,
+         cached_tier and tostring(cached_tier) or "NULL",
+         cached_remorts and tostring(cached_remorts) or "NULL",
+         cached_redos and tostring(cached_redos) or "NULL")
+      db:exec(query)
+      if not dbcheck(db:errcode(), db:errmsg(), query) then
+         active_gquest_id = db:last_insert_rowid()
+      end
+   elseif active_gquest_id and gqinfo_gq_number then
+      -- Verify gq_number matches saved record
+      local saved_gq_num = nil
+      for row in db:nrows(string.format(
+         "SELECT gq_number FROM gquests WHERE id = %d", active_gquest_id)) do
+         saved_gq_num = row.gq_number
+      end
+      if saved_gq_num and saved_gq_num ~= gqinfo_gq_number then
+         -- Different gquest — close old, create new
+         close_open_gquest()
+         local query = string.format(
+            "INSERT INTO gquests (timestamp, gq_number, level, tier, remort, redo) " ..
+            "VALUES (%d, %d, %d, %s, %s, %s)",
+            os.time(),
+            gqinfo_gq_number,
+            cached_level or 0,
+            cached_tier and tostring(cached_tier) or "NULL",
+            cached_remorts and tostring(cached_remorts) or "NULL",
+            cached_redos and tostring(cached_redos) or "NULL")
+         db:exec(query)
+         if not dbcheck(db:errcode(), db:errmsg(), query) then
+            active_gquest_id = db:last_insert_rowid()
+         end
+      end
+   end
+
+   -- Chain: send gq check to fetch mob list
+   if active_gquest_id then
+      enable_gqcheck_parsing()
+      SendNoEcho("gq check")
+   end
+end
+
+-- =============================================================================
+-- Global Quest: silent gq check parsing handlers
+-- =============================================================================
+function ldb_on_gqcheck_mob(name, line, wildcards)
+   local count = tonumber(wildcards[1]) or 1
+   local mob_name = wildcards[2]
+   local area = wildcards[3]
+   if mob_name then
+      mob_name = string.match(mob_name, "^%s*(.-)%s*$")  -- trim
+   end
+   if area then
+      area = string.match(area, "^%s*(.-)%s*$")
+   end
+   table.insert(gqinfo_mob_buffer, {name = mob_name, area = area, count = count})
+   -- Reset timeout: bump generation so old timer becomes stale, schedule new one
+   gqcheck_generation = gqcheck_generation + 1
+   DoAfterSpecial(1, "gqcheck_timeout(" .. gqcheck_generation .. ")", 12)
+end
+
+function ldb_on_gqcheck_none(name, line, wildcards)
+   disable_gqcheck_parsing()
+   close_open_gquest()
+end
+
+function ldb_on_gqcheck_gag(name, line, wildcards)
+   -- No-op handler for gagged gq check lines
+end
+
+-- Timer-based end detection for gq check (must be global for DoAfterSpecial)
+-- Generation parameter prevents stale timeouts from acting after timer reset
+function gqcheck_timeout(gen)
+   if gen ~= gqcheck_generation then return end  -- stale timeout, ignore
+   disable_gqcheck_parsing()
+   flush_gqcheck_mob_buffer()
+end
+
+-- =============================================================================
+-- Global Quest: delayed gq info check on plugin load (must be global)
+-- =============================================================================
+function delayed_gq_info()
+   if not db then return end
+   if not enabled then return end
+   send_silent_gq_info()
+end
+
+-- =============================================================================
 -- Helper: format number with commas
 -- =============================================================================
 local function format_number(n)
@@ -1526,6 +2276,12 @@ function ldb_status(name, line, wildcards)
          pup_event_count = row.cnt
       end
       ColourNote("cyan", "", "  Pup events recorded: " .. format_number(pup_event_count))
+
+      local gquest_count = 0
+      for row in db:nrows("SELECT COUNT(*) as cnt FROM gquests") do
+         gquest_count = row.cnt
+      end
+      ColourNote("cyan", "", "  GQuests recorded: " .. format_number(gquest_count))
    end
 
    if cached_level then
@@ -1578,6 +2334,8 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb quest [filter]      - Quest log (default: current tier & remort)")
    ColourNote("cyan", "", "  ldb cp [filter]         - Campaign log (default: current tier & remort)")
    ColourNote("cyan", "", "  ldb cp show <id>        - Detailed view of a specific campaign")
+   ColourNote("cyan", "", "  ldb gq [filter]         - Global quest log (default: current tier & remort)")
+   ColourNote("cyan", "", "  ldb gq show <id>        - Detailed view of a specific global quest")
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
    ColourNote("cyan", "", "")
@@ -3027,6 +3785,294 @@ function ldb_campaign_show(name, line, wildcards)
 end
 
 -- =============================================================================
+-- Command: ldb gq / ldb gquests [filter]
+-- =============================================================================
+function ldb_gquests(name, line, wildcards)
+   if not require_db() then return end
+
+   local filter = parse_args(wildcards[1])
+   if not filter then return end
+
+   -- Resolve tier/remort/redo
+   local tier = filter.tier or cached_tier
+   local redo = filter.redo
+   if not filter.tier then redo = cached_redos or 0 end
+   if redo == nil then redo = 0 end
+   local remort = filter.remort or cached_remorts
+
+   if not filter.all then
+      if not tier then
+         ColourNote("red", "", PREFIX .. "Current tier unknown. Try again after GMCP data arrives.")
+         return
+      end
+      if not remort then
+         ColourNote("red", "", PREFIX .. "Current remort unknown. Try again after GMCP data arrives.")
+         return
+      end
+   end
+
+   -- Build WHERE clause
+   local where = "1=1"
+   if not filter.all then
+      where = string.format("tier = %d AND remort = %d AND %s", tier, remort, redo_where(redo))
+   elseif filter.tier then
+      where = string.format("tier = %d AND %s", filter.tier, redo_where(filter.redo or 0))
+   end
+
+   -- Fetch gquests in chronological order (cap at 50)
+   local gquests = {}
+   for row in db:nrows(
+      "SELECT id, timestamp, level, gq_number, result, mob_count, qp, gold, tp, duration " ..
+      "FROM gquests WHERE " .. where .. " ORDER BY timestamp LIMIT 50") do
+      table.insert(gquests, row)
+   end
+
+   -- Check if there are more
+   local total_count = 0
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM gquests WHERE " .. where) do
+      total_count = row.cnt
+   end
+
+   -- Header
+   local label = filter.all and "all" or (format_tier_label(tier, redo) .. " R" .. remort)
+   ColourNote("cyan", "", PREFIX .. "Global Quests - " .. label .. ":")
+
+   if #gquests == 0 then
+      ColourNote("yellow", "", "  No global quests recorded.")
+      return
+   end
+
+   -- Column header (# = database ID)
+   local max_id = 2
+   for _, g in ipairs(gquests) do
+      local id_len = #tostring(g.id)
+      if id_len > max_id then max_id = id_len end
+   end
+   local fmt = "  %-" .. max_id .. "s  %3s  %4s  %4s  %5s  %3s  %5s"
+   ColourNote("cyan", "", string.format(fmt,
+      "#", "Lvl", "Mobs", "QP", "Gold", "TP", "Time"))
+   local sep = string.format(fmt,
+      string.rep("-", max_id), "---", "----", "----", "-----", "---", "-----")
+   ColourNote("cyan", "", sep)
+
+   -- Data rows
+   local won_count = 0
+   local comp_count = 0
+   local expired_count = 0
+   local cancelled_count = 0
+   local quit_count = 0
+   local unknown_count = 0
+   local sum_qp = 0
+   local sum_gold = 0
+   local sum_duration = 0
+   local finished_count = 0  -- won + completed (for avg calculations)
+
+   for i, g in ipairs(gquests) do
+      local is_active = (g.id == active_gquest_id and (g.result == nil or g.result == ""))
+
+      if g.result == "won" then
+         won_count = won_count + 1
+         finished_count = finished_count + 1
+         sum_qp = sum_qp + (g.qp or 0)
+         sum_gold = sum_gold + (g.gold or 0)
+         sum_duration = sum_duration + (g.duration or 0)
+      elseif g.result == "completed" then
+         comp_count = comp_count + 1
+         finished_count = finished_count + 1
+         sum_qp = sum_qp + (g.qp or 0)
+         sum_gold = sum_gold + (g.gold or 0)
+         sum_duration = sum_duration + (g.duration or 0)
+      elseif g.result == "expired" then
+         expired_count = expired_count + 1
+         sum_qp = sum_qp + (g.qp or 0)  -- per-mob QP still counts
+      elseif g.result == "cancelled" then
+         cancelled_count = cancelled_count + 1
+         sum_qp = sum_qp + (g.qp or 0)
+      elseif g.result == "quit" then
+         quit_count = quit_count + 1
+         sum_qp = sum_qp + (g.qp or 0)
+      elseif g.result == "unknown" then
+         unknown_count = unknown_count + 1
+      end
+
+      local row_text = string.format(fmt,
+         g.id,
+         g.level,
+         g.mob_count and tostring(g.mob_count) or "-",
+         g.qp and format_number(g.qp) or "-",
+         g.gold and format_number(g.gold) or "-",
+         g.tp and tostring(g.tp) or "-",
+         format_duration(g.duration))
+
+      if is_active then
+         ColourNote("white", "", row_text, "green", "", " (active)")
+      elseif g.result == "won" then
+         ColourNote("white", "", row_text, "cyan", "", " (won)")
+      elseif g.result == "expired" then
+         ColourNote("white", "", row_text, "red", "", " (expired)")
+      elseif g.result == "cancelled" then
+         ColourNote("white", "", row_text, "red", "", " (cancelled)")
+      elseif g.result == "quit" then
+         ColourNote("white", "", row_text, "red", "", " (quit)")
+      else
+         ColourNote("white", "", row_text)
+      end
+   end
+
+   -- Summary
+   ColourNote("cyan", "", sep)
+   local parts = {}
+   if won_count > 0 then table.insert(parts, won_count .. " won") end
+   if comp_count > 0 then table.insert(parts, comp_count .. " completed") end
+   if expired_count > 0 then table.insert(parts, expired_count .. " expired") end
+   if cancelled_count > 0 then table.insert(parts, cancelled_count .. " cancelled") end
+   if quit_count > 0 then table.insert(parts, quit_count .. " quit") end
+   if unknown_count > 0 then table.insert(parts, unknown_count .. " unknown") end
+   local summary_line = "  " .. table.concat(parts, ", ")
+   if total_count > #gquests then
+      summary_line = summary_line .. string.format(" (showing %d of %d)", #gquests, total_count)
+   else
+      summary_line = summary_line .. string.format(" (of %d total)", #gquests)
+   end
+   ColourNote("white", "", summary_line)
+
+   if sum_qp > 0 then
+      local avg_parts = {}
+      if finished_count > 0 then
+         table.insert(avg_parts, "Avg QP: " .. format_number(math.floor(sum_qp / finished_count)))
+         table.insert(avg_parts, "Avg time: " .. format_duration(math.floor(sum_duration / finished_count)))
+      end
+      table.insert(avg_parts, "Total QP: " .. format_number(sum_qp))
+      if sum_gold > 0 then
+         table.insert(avg_parts, "Total gold: " .. format_number(sum_gold))
+      end
+      ColourNote("white", "", "  " .. table.concat(avg_parts, " | "))
+   end
+end
+
+-- =============================================================================
+-- Command: ldb gq show <id>
+-- =============================================================================
+function ldb_gquest_show(name, line, wildcards)
+   if not require_db() then return end
+
+   local gq_id = tonumber(wildcards[1])
+   if not gq_id then
+      ColourNote("red", "", PREFIX .. "Usage: ldb gq show <id>")
+      return
+   end
+
+   -- Fetch gquest record
+   local gquest = nil
+   for row in db:nrows(string.format(
+      "SELECT id, timestamp, gq_number, level, tier, remort, redo, result, duration, mob_count, " ..
+      "qp, gold, tp, trains, pracs, expected_qp, expected_gold " ..
+      "FROM gquests WHERE id = %d", gq_id)) do
+      gquest = row
+   end
+
+   if not gquest then
+      ColourNote("red", "", PREFIX .. "Global Quest #" .. gq_id .. " not found.")
+      return
+   end
+
+   -- Header
+   local header = PREFIX .. "Global Quest #" .. gq_id
+   if gquest.gq_number then
+      header = header .. " (GQ " .. gquest.gq_number .. ")"
+   end
+   ColourNote("cyan", "", header .. ":")
+
+   -- Started
+   ColourNote("white", "", "  Started:  " .. os.date("%Y-%m-%d %H:%M", gquest.timestamp))
+
+   -- Level + tier/remort
+   local level_str = tostring(gquest.level)
+   if gquest.tier and gquest.remort then
+      level_str = level_str .. " (" .. format_tier_label(gquest.tier, gquest.redo) .. " R" .. gquest.remort .. ")"
+   end
+   ColourNote("white", "", "  Level:    " .. level_str)
+
+   -- Result + duration
+   local is_active = (gquest.id == active_gquest_id and (gquest.result == nil or gquest.result == ""))
+   local result = gquest.result or "active"
+   local dur_str = gquest.duration and (" (" .. format_duration(gquest.duration) .. ")") or ""
+
+   if is_active or result == "active" then
+      ColourNote("white", "", "  Result:   ", "green", "", "active")
+   elseif result == "won" then
+      ColourNote("white", "", "  Result:   ", "cyan", "", "won" .. dur_str)
+   elseif result == "completed" then
+      ColourNote("white", "", "  Result:   completed" .. dur_str)
+   elseif result == "expired" then
+      ColourNote("white", "", "  Result:   ", "red", "", "expired" .. dur_str)
+   elseif result == "cancelled" then
+      ColourNote("white", "", "  Result:   ", "red", "", "cancelled" .. dur_str)
+   elseif result == "quit" then
+      ColourNote("white", "", "  Result:   ", "red", "", "quit" .. dur_str)
+   elseif result == "unknown" then
+      ColourNote("white", "", "  Result:   ", "red", "", "unknown" .. dur_str)
+   else
+      ColourNote("white", "", "  Result:   " .. result .. dur_str)
+   end
+
+   -- Mobs
+   if gquest.mob_count then
+      ColourNote("white", "", "  Mobs:     " .. gquest.mob_count)
+   end
+
+   -- Rewards
+   if result == "won" or result == "completed" then
+      local reward_parts = {}
+      if gquest.qp then table.insert(reward_parts, format_number(gquest.qp) .. " QP") end
+      if gquest.gold then table.insert(reward_parts, format_number(gquest.gold) .. " gold") end
+      if gquest.tp then table.insert(reward_parts, gquest.tp .. " TP") end
+      if gquest.trains then table.insert(reward_parts, gquest.trains .. " trains") end
+      if gquest.pracs then table.insert(reward_parts, gquest.pracs .. " pracs") end
+      if #reward_parts > 0 then
+         ColourNote("white", "", "  Rewards:  " .. table.concat(reward_parts, ", "))
+      end
+   elseif is_active or result == "active" then
+      -- Show expected rewards and per-mob QP accumulated so far
+      local exp_parts = {}
+      if gquest.expected_qp then table.insert(exp_parts, format_number(gquest.expected_qp) .. " QP (base)") end
+      if gquest.expected_gold then table.insert(exp_parts, format_number(gquest.expected_gold) .. " gold") end
+      if #exp_parts > 0 then
+         ColourNote("white", "", "  Expected: " .. table.concat(exp_parts, ", "))
+      end
+      if gquest.qp and gquest.qp > 0 then
+         ColourNote("white", "", "  Mob QP:   " .. format_number(gquest.qp) .. " (so far)")
+      end
+   elseif result == "expired" or result == "cancelled" or result == "quit" then
+      -- Show per-mob QP earned even though gquest wasn't completed
+      if gquest.qp and gquest.qp > 0 then
+         ColourNote("white", "", "  Mob QP:   " .. format_number(gquest.qp))
+      end
+   end
+
+   -- Mob list
+   local mobs = {}
+   for row in db:nrows(string.format(
+      "SELECT mob_name, area, mob_count FROM gquest_mobs WHERE gquest_id = %d ORDER BY id", gq_id)) do
+      table.insert(mobs, row)
+   end
+
+   if #mobs > 0 then
+      Note("")
+      ColourNote("cyan", "", "  Mob list (" .. #mobs .. "):")
+      local num_w = #tostring(#mobs)
+      for i, mob in ipairs(mobs) do
+         local mob_str = mob.mob_name
+         if mob.mob_count and mob.mob_count > 1 then
+            mob_str = mob.mob_count .. " * " .. mob_str
+         end
+         ColourNote("white", "", string.format("    %" .. num_w .. "d. %s (%s)",
+            i, mob_str, mob.area or "?"))
+      end
+   end
+end
+
+-- =============================================================================
 -- Command: ldb zone [name]
 -- =============================================================================
 function ldb_zone(name, line, wildcards)
@@ -3289,6 +4335,9 @@ function ldb_db_info(name, line, wildcards)
    for row in db:nrows("SELECT COUNT(*) as cnt FROM campaigns") do
       ColourNote("white", "", "  Campaigns: " .. format_number(row.cnt))
    end
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM gquests") do
+      ColourNote("white", "", "  GQuests: " .. format_number(row.cnt))
+   end
 end
 
 -- =============================================================================
@@ -3334,6 +4383,10 @@ function OnPluginInstall()
    if saved_campaign and saved_campaign ~= "" then
       active_campaign_id = tonumber(saved_campaign)
    end
+   local saved_gquest = GetVariable("active_gquest_id")
+   if saved_gquest and saved_gquest ~= "" then
+      active_gquest_id = tonumber(saved_gquest)
+   end
 
    -- Check quest status via GMCP (handler already sent request quest on connect)
    local quest_data = gmcp("comm.quest")
@@ -3341,9 +4394,10 @@ function OnPluginInstall()
       handle_quest(quest_data)
    end
 
-   -- Schedule delayed cp info check to detect/reconcile in-progress campaigns
+   -- Schedule delayed cp info / gq info checks to detect/reconcile in-progress activities
    if enabled then
       DoAfterSpecial(2, "delayed_cp_info()", 12)  -- 12 = sendto.script
+      DoAfterSpecial(3, "delayed_gq_info()", 12)  -- 3s to avoid overlap with cp info
       ColourNote("cyan", "", PREFIX .. "Loaded (enabled).")
    else
       ColourNote("cyan", "", PREFIX .. "Loaded (disabled). Use 'ldb on' to start collecting data.")
@@ -3354,6 +4408,7 @@ function OnPluginSaveState()
    SetVariable("enabled", tostring(enabled))
    SetVariable("active_quest_id", active_quest_id and tostring(active_quest_id) or "")
    SetVariable("active_campaign_id", active_campaign_id and tostring(active_campaign_id) or "")
+   SetVariable("active_gquest_id", active_gquest_id and tostring(active_gquest_id) or "")
 end
 
 function OnPluginClose()

@@ -31,10 +31,20 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 - Reconnect reconciliation: detects in-progress campaigns on plugin reload
 - Detailed campaign view with full mob list
 
+**Global Quest (GQ) tracking**
+- Full GQ lifecycle: join, mob kills, won/completed/expired/cancelled/quit
+- Mob list captured from silent `gq check` parsing (with kill count for multi-mob targets)
+- Per-mob QP accumulation from "quest points awarded" lines
+- Base rewards captured from `gq info` (expected QP, gold)
+- Win rewards parsed from "Reward of..." lines (QP, gold, TP, trains, pracs)
+- Reconnect reconciliation: detects in-progress GQs on plugin reload
+- Detailed GQ view with full mob list
+
 **Query and analysis**
 - Per-level kill breakdowns with totals and averages
 - Redo support: after T9R7, redo count tracked alongside tier/remort. Filter syntax: `T9+3 R5`. Hidden in display when 0.
 - Tier/redo/remort filtering on all commands (default: current; supports `all`, `T1 R5`, `T9+3`, `R4`)
+- Global quest history with win/completion/expiration tracking and per-mob QP accumulation
 - Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200) with separate powerup section
 - Tier summary: compare remorts side-by-side within a tier, with powerup comparison
 - Per-zone and per-mob stats with substring search
@@ -65,6 +75,8 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 | `ldb quest [filter]` | Quest history table (default: current T+R) |
 | `ldb cp [filter]` | Campaign history table (default: current T+R) |
 | `ldb cp show <id>` | Detailed view of a campaign by database ID |
+| `ldb gq [filter]` | Global quest history table (default: current T+R) |
+| `ldb gq show <id>` | Detailed view of a global quest by database ID |
 | `ldb db` | Database file info (path, size, record counts) |
 
 **Filter options** (for level/this/last/pup/quest/cp): default = current tier+redo and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T9+3 R5` = tier 9, redo 3, remort 5. `T1` = all remorts within a tier. `R4` = specific remort, current tier. Redo is hidden in display when 0.

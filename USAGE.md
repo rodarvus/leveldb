@@ -29,6 +29,8 @@ Type `ldb on` to start collecting. Everything else is automatic.
 | `ldb quest` | Quest history |
 | `ldb cp` | Campaign history |
 | `ldb cp show 17` | Full detail for a campaign |
+| `ldb gq` | Global quest history |
+| `ldb gq show 5` | Full detail for a global quest |
 | `ldb deaths` | Recent deaths |
 | `ldb db` | Database file info |
 | `ldb help` | List all commands in-game |
@@ -398,6 +400,57 @@ Full detail for a single campaign by its database ID (the `#` column from `ldb c
      ...
 ```
 
+### `ldb gq [filter]` — Global Quest History
+
+Tabular GQ log with QP, gold, TP, time, and result status. Won GQs are highlighted in cyan, expired/cancelled/quit in red. Supports tier/remort filtering.
+
+- `ldb gq` — current T+R
+- `ldb gq all` — all tiers and remorts
+- `ldb gq T1 R5` — specific tier and remort
+
+```
+> ldb gq
+
+[LevelDB] Global Quests - T1 R1:
+  #   Lvl  Mobs  QP    Gold   TP   Time
+  --  ---  ----  ----  -----  ---  -----
+  1    12     8    40  1,000    -    12m  (won)
+  2    15     6     9      -    -     8m  (expired)
+  3    18    10    55  1,500    -    15m  (won)
+  --  ---  ----  ----  -----  ---  -----
+  2 won, 1 expired (of 3 total)
+  Avg QP: 47 | Avg time: 13m | Total QP: 104 | Total gold: 2,500
+```
+
+Per-mob QP (from "N quest points awarded" lines) is accumulated into the QP total even for GQs that weren't won or completed.
+
+### `ldb gq show <id>` — Global Quest Detail
+
+Full detail for a single global quest by its database ID. Shows GQ number, timestamp, level, result, rewards, and the complete mob list with kill counts.
+
+```
+> ldb gq show 1
+
+[LevelDB] Global Quest #1 (GQ 7286):
+  Started:  2026-04-01 16:05
+  Level:    12 (T1 R1)
+  Result:   won (12m)
+  Mobs:     8
+  Rewards:  40 QP, 1,000 gold
+
+  Mob list (8):
+    1. Jille (beer)
+    2. a Morukian officer (callhero)
+    3. a fighting troll (fantasy)
+    4. 2 * billows of smoke (fireswamp)
+    5. 2 * a suffocating witch (gallows)
+    6. the watch ghost (gauntlet)
+    7. a half-griffon judge (sirens)
+    8. a stool (wizards)
+```
+
+For multi-target mobs (e.g., "2 * billows of smoke"), the kill count is shown.
+
 ### `ldb deaths [N]` — Death Log
 
 Last N deaths (default 10). Shows timestamp, level, mob, zone, and tier/remort.
@@ -434,6 +487,7 @@ Shows the database file path, size, and record counts.
 - **Powerups**: Detected via the "Congratulations" text trigger on each powerup. Trains earned are captured from subsequent "You gain N trains" text lines.
 - **Quests**: Tracked automatically via GMCP `comm.quest` messages (start, complete, fail, timeout).
 - **Campaigns**: Tracked via text triggers for campaign start/complete/quit. Mob lists are captured by silently running `cp info`.
+- **Global Quests**: Tracked via text triggers for join/won/completed/expired/cancelled/quit. Mob lists are captured by silently running `gq check`, and expected rewards from `gq info`. Per-mob QP is accumulated from "N quest points awarded" lines after each mob kill.
 
 All records include your current level, tier, and remort at the time of the event.
 
