@@ -478,21 +478,24 @@ POWERUP (PUP) TRACKING
 
 Pup Detection:
   Primary: text trigger matches "Congratulations, X. You have increased your
-  powerups to N." This fires reliably for every pup. The handler creates a
-  pending_pup record with the current state snapshot: timestamp, tier, remort,
-  pup_number, zone, xp_per_level, and trains_before.
+  powerups to N." This fires reliably for every pup.
 
   Fallback: char.base GMCP broadcast with increased pups value. Only creates
   pending_pup if the text trigger hasn't already handled this pup number.
 
-  If a stale pending_pup exists when a new pup is detected (char.worth never
-  arrived for the previous pup), the stale one is finalized with NULL trains.
+  If a stale pending_pup exists when a new pup is detected, the stale one is
+  finalized with NULL trains.
 
 Train Delta Computation:
-  When char.worth GMCP broadcast arrives and a pending_pup exists:
-  trains_earned = new_trains - pending_pup.trains_before
-  The pup event is recorded via record_pup_event() and pending_pup is cleared.
-  cached_trains is updated AFTER the delta computation.
+  GMCP char.worth typically fires BEFORE the text trigger, so cached_trains
+  already holds the post-pup value when the trigger runs. The plugin tracks
+  prev_trains (the value before the most recent char.worth update) to compute:
+  trains_earned = cached_trains - prev_trains
+
+  When both values are available, the pup event is recorded immediately in the
+  text trigger handler. If prev_trains is not yet available (e.g., first pup
+  after plugin load), a pending_pup is created and finalized when the next
+  char.worth broadcast arrives.
 
   Note: Practices are not earned from powerups; only trains are tracked.
 
@@ -502,12 +505,14 @@ Per-Area Productivity (derived, not stored):
   - Est time per pup = (xp_per_level / avg_xp_per_kill) * avg_combat_time_per_kill
   - Est trains per hour = (avg_trains_per_pup / est_time_per_pup) * 3600
 
-GMCP Ordering Edge Cases:
-  - char.base before char.worth (expected): handled by pending_pup mechanism
-  - char.worth before char.base (unlikely): worth update caches values, no
-    pending_pup exists yet, delta computed on next worth update (may be 0)
-  - Multiple pups before char.worth: previous pending_pup finalized with NULL
-    trains, new pending_pup created
+Timing:
+  - char.worth fires before text trigger (typical): prev_trains has pre-pup
+    value, cached_trains has post-pup value. Text trigger computes delta
+    immediately and records the pup event.
+  - char.worth fires after text trigger (rare): text trigger creates
+    pending_pup with trains_before = cached_trains. char.worth finalizes it.
+  - char.base fires (fallback): only creates pending_pup if text trigger
+    hasn't already handled this pup number. Uses prev_trains as baseline.
 
 ================================================================================
 GMCP BROADCASTS HANDLED

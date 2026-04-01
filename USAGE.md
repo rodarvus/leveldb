@@ -427,7 +427,7 @@ Shows the database file path, size, and record counts.
 
 - **Kills**: Tracked via GMCP enemy state changes. XP is calculated from TNL difference before and after each kill. Mob level is estimated from sacrifice gold (gold x 2). Damage and rounds are counted from combat text. Active combat time is measured per kill using `utils.timer()`.
 - **Deaths**: Captured from the "You have died" trigger.
-- **Powerups**: Detected automatically when GMCP `char.base.pups` increments. Trains earned are computed from the delta of `char.worth.trains` before and after the pup event.
+- **Powerups**: Detected via the "Congratulations" text trigger on each powerup. Trains earned are computed from the `char.worth.trains` delta.
 - **Quests**: Tracked automatically via GMCP `comm.quest` messages (start, complete, fail, timeout).
 - **Campaigns**: Tracked via text triggers for campaign start/complete/quit. Mob lists are captured by silently running `cp info`.
 

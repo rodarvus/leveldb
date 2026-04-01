@@ -421,6 +421,7 @@ local cached_room_num = nil
 local cached_room_name = nil
 local cached_enemy = ""
 local cached_trains = nil    -- from char.worth
+local prev_trains = nil      -- trains value before most recent char.worth update
 
 -- =============================================================================
 -- Pup tracking state
@@ -794,6 +795,7 @@ function OnPluginBroadcast(msg, id, name, text)
                if pending_pup then
                   record_pup_event(pending_pup, nil)
                end
+               -- Use prev_trains as baseline (char.worth may have already updated)
                pending_pup = {
                   timestamp = os.time(),
                   tier = cached_tier,
@@ -801,7 +803,7 @@ function OnPluginBroadcast(msg, id, name, text)
                   pup_number = cached_pups,
                   zone = cached_zone or "Unknown",
                   xp_per_level = cached_perlevel,
-                  trains_before = cached_trains,
+                  trains_before = prev_trains or cached_trains,
                }
             end
          end
@@ -892,8 +894,11 @@ function OnPluginBroadcast(msg, id, name, text)
             pending_pup = nil
          end
 
-         -- Update cached value AFTER delta computation
-         if new_trains then cached_trains = new_trains end
+         -- Save previous value, then update
+         if new_trains then
+            prev_trains = cached_trains
+            cached_trains = new_trains
+         end
       end
 
    elseif text == "comm.quest" then
@@ -944,23 +949,43 @@ function ldb_on_powerup(name, line, wildcards)
    cached_pups = pup_number
    prev_pups = pup_number
 
-   -- Snapshot trains before char.worth updates
-   local trains_before = cached_trains
-
-   -- Create pending_pup; will be finalized when char.worth arrives
-   -- If there's already a pending_pup (shouldn't happen), finalize it
+   -- Finalize any stale pending_pup
    if pending_pup then
       record_pup_event(pending_pup, nil)
+      pending_pup = nil
    end
-   pending_pup = {
-      timestamp = os.time(),
-      tier = cached_tier,
-      remort = cached_remorts,
-      pup_number = pup_number,
-      zone = cached_zone or "Unknown",
-      xp_per_level = cached_perlevel,
-      trains_before = trains_before,
-   }
+
+   -- char.worth typically fires BEFORE this text trigger, so cached_trains
+   -- already has the post-pup value. Use prev_trains as the pre-pup baseline.
+   -- If both are available, record immediately (no need to wait for char.worth).
+   local trains_earned = nil
+   if prev_trains and cached_trains then
+      trains_earned = cached_trains - prev_trains
+      if trains_earned <= 0 then trains_earned = nil end
+   end
+
+   if trains_earned then
+      -- We have everything — record immediately
+      record_pup_event({
+         timestamp = os.time(),
+         tier = cached_tier,
+         remort = cached_remorts,
+         pup_number = pup_number,
+         zone = cached_zone or "Unknown",
+         xp_per_level = cached_perlevel,
+      }, trains_earned)
+   else
+      -- Fallback: wait for char.worth to arrive
+      pending_pup = {
+         timestamp = os.time(),
+         tier = cached_tier,
+         remort = cached_remorts,
+         pup_number = pup_number,
+         zone = cached_zone or "Unknown",
+         xp_per_level = cached_perlevel,
+         trains_before = cached_trains,
+      }
+   end
 end
 
 -- =============================================================================
