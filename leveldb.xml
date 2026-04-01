@@ -586,7 +586,7 @@
       regexp="y"
       keep_evaluating="y"
       omit_from_output="y"
-      script="ldb_on_gqinfo_none"
+      script="ldb_on_gqinfo_multi"
       sequence="89"
    ></trigger>
 
@@ -1993,6 +1993,13 @@ end
 function ldb_on_gqinfo_none(name, line, wildcards)
    disable_gqinfo_parsing()
    close_open_gquest()
+end
+
+function ldb_on_gqinfo_multi(name, line, wildcards)
+   -- "There is more than one global quest running." has a follow-up line
+   -- "Use syntax: 'gquest info [num]'..." that needs to be gagged too.
+   -- Delay cleanup by 1s so the gag trigger catches the follow-up line.
+   DoAfterSpecial(1, "ldb_on_gqinfo_none()", 12)
 end
 
 function ldb_on_gqinfo_qn(name, line, wildcards)
