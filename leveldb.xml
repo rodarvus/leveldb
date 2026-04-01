@@ -444,8 +444,7 @@ local cached_enemy = ""
 -- =============================================================================
 -- Pup tracking state
 -- =============================================================================
-local prev_pups = nil           -- Previous pups value for char.base fallback detection
-local last_pup_event_id = nil   -- DB id of most recent pup_events row (for train UPDATE)
+local last_pup_event_id = nil    -- DB id of most recent pup_events row (for train UPDATE)
 
 -- =============================================================================
 -- Quest/Campaign tracking state
@@ -673,6 +672,7 @@ local function start_fight(enemy_name)
    damage_total = 0
    round_count = 0
    last_enemypct = nil
+   last_pup_event_id = nil  -- pup reward lines are done once combat resumes
    sacrifice_mob_level = nil
 
    fight_start = {
@@ -805,23 +805,6 @@ function OnPluginBroadcast(msg, id, name, text)
          if base.tier then cached_tier = tonumber(base.tier) end
          if base.remorts then cached_remorts = tonumber(base.remorts) end
          if base.pups then cached_pups = tonumber(base.pups) end
-
-         -- Fallback pup detection if text trigger missed (e.g., trigger disabled)
-         if cached_pups and prev_pups and cached_pups > prev_pups then
-            -- Only record if text trigger hasn't already handled this pup
-            if not last_pup_event_id then
-               record_pup_event({
-                  timestamp = os.time(),
-                  tier = cached_tier,
-                  remort = cached_remorts,
-                  pup_number = cached_pups,
-                  zone = cached_zone or "Unknown",
-                  xp_per_level = cached_perlevel,
-               }, nil)
-               last_pup_event_id = db and db:last_insert_rowid() or nil
-            end
-         end
-         prev_pups = cached_pups
       end
 
    elseif text == "char.status" then
@@ -939,7 +922,6 @@ function ldb_on_powerup(name, line, wildcards)
 
    -- Update cached pups
    cached_pups = pup_number
-   prev_pups = pup_number
 
    -- Record pup event immediately with trains_earned = 0
    -- Train text triggers will UPDATE this record to add trains
@@ -952,6 +934,11 @@ function ldb_on_powerup(name, line, wildcards)
       xp_per_level = cached_perlevel,
    }, 0)
    last_pup_event_id = db:last_insert_rowid()
+
+   -- Clear last_pup_event_id after 1 second to prevent quest/other train
+   -- messages from being attributed to this pup. Pup train lines arrive
+   -- in the same server packet (milliseconds), so 1s is generous.
+   DoAfterSpecial(1, "last_pup_event_id = nil", 12)  -- 12 = sendto.script
 end
 
 function ldb_on_pup_trains(name, line, wildcards)
@@ -2419,7 +2406,7 @@ function ldb_remort(name, line, wildcards)
    local pup_where_clause = string.format("tier = %d AND remort = %d", tier, remort)
    local kill_where = string.format("level >= 200 AND tier = %d AND remort = %d", tier, remort)
    -- render_pup_section prints nothing if no pup data exists
-   local pc = render_pup_section(pup_where_clause, kill_where)
+   render_pup_section(pup_where_clause, kill_where)
 end
 
 -- =============================================================================
@@ -3267,7 +3254,7 @@ function OnPluginInstall()
       if base.remorts then cached_remorts = tonumber(base.remorts) end
       if base.pups then cached_pups = tonumber(base.pups) end
    end
-   prev_pups = cached_pups  -- Prevent false pup detection on reload
+   last_pup_event_id = nil  -- Clear stale pup train tracking on reload
 
    local status = gmcp("char.status")
    if status then

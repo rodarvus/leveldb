@@ -493,6 +493,10 @@ Train Tracking:
   on the pup_events row saved by the powerup trigger. This is simple and
   reliable — no GMCP timing dependencies.
 
+  The last_pup_event_id is cleared after 1 second (DoAfterSpecial) and on
+  combat start, to prevent quest/campaign train rewards from being
+  incorrectly attributed to a pup event.
+
   Note: Practices are not earned from powerups; only trains are tracked.
 
 Per-Area Productivity (derived, not stored):
@@ -710,9 +714,9 @@ v7.0 (2026-04-01):
   - Powerup module redesign: productivity-focused tracking
   - New table: pup_events (sequential ID, trains_earned, zone, xp_per_level)
   - New column: kills.combat_time (active combat duration per kill)
-  - New GMCP handler: char.worth (caches trains for pup train delta)
-  - Pup detection via char.base.pups increment with pending_pup mechanism
-  - New command: ldb pup [filter|zone|id] - powerup productivity stats
+  - Pup detection via text trigger ("Congratulations...powerups to N")
+  - Train tracking via text triggers ("You gain N trains", "Lucky!")
+  - New commands: ldb pup [filter|zone|id], ldb pup list [N]
   - Removed Pups bracket from remort/tier bracket tables
   - ldb remort/tier now show separate powerup sections
   - ldb level/this/last at 200+ redirect to ldb pup
