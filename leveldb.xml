@@ -579,6 +579,16 @@
       script="ldb_on_gqinfo_none"
       sequence="89"
    ></trigger>
+   <trigger
+      name="trg_ldb_gqinfo_multi"
+      match="^There is more than one global quest running\.$"
+      enabled="n"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="y"
+      script="ldb_on_gqinfo_none"
+      sequence="89"
+   ></trigger>
 
    <!-- gq info: Quest Name (captures gq number) -->
    <trigger
@@ -631,7 +641,7 @@
    <!-- gq info: catch-all gag for header/metadata lines -->
    <trigger
       name="trg_ldb_gqinfo_gag"
-      match="^(?:-+\[|Quest (?:Name|Type|Status|Duration)|Level range|Time to Start|Kill at least)"
+      match="^(?:-+\[|Quest (?:Name|Type|Status|Duration)|Level range|Time to Start|Kill at least|Use syntax: 'gquest)"
       enabled="n"
       regexp="y"
       keep_evaluating="y"
@@ -1732,6 +1742,7 @@ local function enable_gqinfo_parsing()
    gqinfo_status = nil
    EnableTrigger("trg_ldb_gqinfo_none", true)
    EnableTrigger("trg_ldb_gqinfo_norun", true)
+   EnableTrigger("trg_ldb_gqinfo_multi", true)
    EnableTrigger("trg_ldb_gqinfo_qn", true)
    EnableTrigger("trg_ldb_gqinfo_status", true)
    EnableTrigger("trg_ldb_gqinfo_qp", true)
@@ -1743,6 +1754,7 @@ end
 local function disable_gqinfo_parsing()
    EnableTrigger("trg_ldb_gqinfo_none", false)
    EnableTrigger("trg_ldb_gqinfo_norun", false)
+   EnableTrigger("trg_ldb_gqinfo_multi", false)
    EnableTrigger("trg_ldb_gqinfo_qn", false)
    EnableTrigger("trg_ldb_gqinfo_status", false)
    EnableTrigger("trg_ldb_gqinfo_qp", false)
