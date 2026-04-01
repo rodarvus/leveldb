@@ -1815,7 +1815,7 @@ local function render_pup_list(pup_where_clause, limit)
    local pups = {}
    for row in db:nrows(string.format(
       "SELECT id, timestamp, tier, remort, redo, pup_number, zone, trains_earned " ..
-      "FROM pup_events WHERE %s ORDER BY id DESC LIMIT %d",
+      "FROM (SELECT * FROM pup_events WHERE %s ORDER BY id DESC LIMIT %d) ORDER BY id ASC",
       pup_where_clause, limit)) do
       table.insert(pups, row)
    end
