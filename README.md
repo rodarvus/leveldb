@@ -33,7 +33,8 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 
 **Query and analysis**
 - Per-level kill breakdowns with totals and averages
-- Tier/remort filtering on all commands (default: current T+R; supports `all`, `T1 R5`, `T1`, `R4`)
+- Redo support: after T9R7, redo count tracked alongside tier/remort. Filter syntax: `T9+3 R5`. Hidden in display when 0.
+- Tier/redo/remort filtering on all commands (default: current; supports `all`, `T1 R5`, `T9+3`, `R4`)
 - Remort summary: bracket breakdown (1-50, 51-100, 101-150, 151-200) with separate powerup section
 - Tier summary: compare remorts side-by-side within a tier, with powerup comparison
 - Per-zone and per-mob stats with substring search
