@@ -380,7 +380,7 @@
    <!-- cp info: catch-all gag for header/metadata/other lines -->
    <trigger
       name="trg_ldb_cpinfo_gag"
-      match="^(?:-+\[|Complete By|Time Left|Training Session|Practice|The targets for|-{20,}|$)"
+      match="^(?:-+\[|Complete By|Time Left|Training Session|Practice|Trivia|The targets for|-{20,}|$)"
       enabled="n"
       regexp="y"
       keep_evaluating="y"
@@ -754,7 +754,7 @@
    <!-- gq check: header/separator/footer gag -->
    <trigger
       name="trg_ldb_gqcheck_gag"
-      match="^(?:Index\s+Target|-{20,}|Note: Dead means)"
+      match="^(?:Index\s+Target|-{20,}|Note: Dead means|You may win|You can be rewarded)"
       enabled="n"
       regexp="y"
       keep_evaluating="y"
@@ -1835,9 +1835,13 @@ local function disable_gqcheck_parsing()
    EnableTrigger("trg_ldb_gqcheck_gag", false)
 end
 
-local function send_silent_gq_info()
+local function send_silent_gq_info(gq_number)
    enable_gqinfo_parsing()
-   SendNoEcho("gq info")
+   if gq_number then
+      SendNoEcho("gq info " .. gq_number)
+   else
+      SendNoEcho("gq info")
+   end
 end
 
 local function flush_gqcheck_mob_buffer()
@@ -1893,7 +1897,7 @@ function ldb_on_gq_join(name, line, wildcards)
    end
 
    -- Fetch gq info (rewards), then chain gq check (mob list) from gqinfo_end
-   send_silent_gq_info()
+   send_silent_gq_info(gq_num)
 end
 
 function ldb_on_gq_mob_killed(name, line, wildcards)
@@ -2046,8 +2050,18 @@ end
 function ldb_on_gqinfo_multi(name, line, wildcards)
    -- "There is more than one global quest running." has a follow-up line
    -- "Use syntax: 'gquest info [num]'..." that needs to be gagged too.
-   -- Delay cleanup by 1s so the gag trigger catches the follow-up line.
-   DoAfterSpecial(1, "ldb_on_gqinfo_none()", 12)
+   -- Delay disable by 1s so the gag trigger catches the follow-up line.
+   DoAfterSpecial(1, "ldb_on_gqinfo_multi_cleanup()", 12)
+end
+
+function ldb_on_gqinfo_multi_cleanup()
+   disable_gqinfo_parsing()
+   -- Don't close active gquest — "more than one" doesn't mean we're not in one.
+   -- Fall back to gq check to get mob list if we have an active gquest.
+   if active_gquest_id then
+      enable_gqcheck_parsing()
+      SendNoEcho("gq check")
+   end
 end
 
 function ldb_on_gqinfo_qn(name, line, wildcards)
@@ -2101,52 +2115,26 @@ function ldb_on_gqinfo_end(name, line, wildcards)
 
    if not db or not enabled then return end
 
-   -- Update gq_number on existing record if we have one
-   if active_gquest_id and gqinfo_gq_number then
-      db:exec(string.format(
-         "UPDATE gquests SET gq_number = %d WHERE id = %d",
-         gqinfo_gq_number, active_gquest_id))
-   end
+   -- Only update existing records — never create new ones here.
+   -- The join trigger is the sole creator of GQ records.
+   if not active_gquest_id then return end
 
-   -- Reconnect scenario: gq info shows an active gquest but we have no record
-   if not active_gquest_id and gqinfo_gq_number then
-      local query = string.format(
-         "INSERT INTO gquests (timestamp, gq_number, level, tier, remort, redo) " ..
-         "VALUES (%d, %d, %d, %s, %s, %s)",
-         os.time(),
-         gqinfo_gq_number,
-         cached_level or 0,
-         cached_tier and tostring(cached_tier) or "NULL",
-         cached_remorts and tostring(cached_remorts) or "NULL",
-         cached_redos and tostring(cached_redos) or "NULL")
-      db:exec(query)
-      if not dbcheck(db:errcode(), db:errmsg(), query) then
-         active_gquest_id = db:last_insert_rowid()
-      end
-   elseif active_gquest_id and gqinfo_gq_number then
-      -- Verify gq_number matches saved record
+   if gqinfo_gq_number then
+      -- Verify gq_number matches saved record (check before updating)
       local saved_gq_num = nil
       for row in db:nrows(string.format(
          "SELECT gq_number FROM gquests WHERE id = %d", active_gquest_id)) do
          saved_gq_num = row.gq_number
       end
       if saved_gq_num and saved_gq_num ~= gqinfo_gq_number then
-         -- Different gquest — close old, create new
+         -- gq info returned a different GQ than ours — we're no longer in our GQ
          close_open_gquest()
-         local query = string.format(
-            "INSERT INTO gquests (timestamp, gq_number, level, tier, remort, redo) " ..
-            "VALUES (%d, %d, %d, %s, %s, %s)",
-            os.time(),
-            gqinfo_gq_number,
-            cached_level or 0,
-            cached_tier and tostring(cached_tier) or "NULL",
-            cached_remorts and tostring(cached_remorts) or "NULL",
-            cached_redos and tostring(cached_redos) or "NULL")
-         db:exec(query)
-         if not dbcheck(db:errcode(), db:errmsg(), query) then
-            active_gquest_id = db:last_insert_rowid()
-         end
+         return
       end
+      -- Update gq_number on existing record (in case it was NULL from join)
+      db:exec(string.format(
+         "UPDATE gquests SET gq_number = %d WHERE id = %d",
+         gqinfo_gq_number, active_gquest_id))
    end
 
    -- Chain: send gq check to fetch mob list
@@ -2193,7 +2181,9 @@ function ldb_on_gqcheck_mob2(name, line, wildcards)
 end
 
 function ldb_on_gqcheck_none(name, line, wildcards)
-   disable_gqcheck_parsing()
+   -- Don't disable parsing here — let the 1s timeout handle it so the gag
+   -- trigger catches follow-up lines ("You may win...", "You can be rewarded...").
+   -- The timeout's flush_gqcheck_mob_buffer() is a no-op since gquest is closed.
    close_open_gquest()
 end
 
@@ -2215,7 +2205,25 @@ end
 function delayed_gq_info()
    if not db then return end
    if not enabled then return end
-   send_silent_gq_info()
+   -- Only reconcile if we have a saved active gquest from a previous session.
+   -- The join trigger is the sole creator of GQ records; we never discover GQs
+   -- from gq info alone (it shows details even when not joined).
+   if not active_gquest_id then return end
+
+   -- Look up gq_number for targeted gq info (avoids "more than one" ambiguity)
+   local gq_number = nil
+   for row in db:nrows(string.format(
+      "SELECT gq_number FROM gquests WHERE id = %d", active_gquest_id)) do
+      gq_number = row.gq_number
+   end
+
+   if gq_number then
+      send_silent_gq_info(gq_number)
+   else
+      -- No gq_number saved — use gq check to verify we're still in a GQ
+      enable_gqcheck_parsing()
+      SendNoEcho("gq check")
+   end
 end
 
 -- =============================================================================
