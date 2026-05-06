@@ -11,7 +11,7 @@
    purpose="A simple leveling database for Aardwolf"
    date_written="2026-02-17 08:09:56"
    requires="5.07"
-   version="9.0"
+   version="9.2"
    save_state="y"
    >
 
@@ -174,6 +174,27 @@
       regexp="y"
       sequence="100"
       script="ldb_db_info"
+   ></alias>
+   <alias
+      match="^ldb daily(?: (\d+))?$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_daily"
+   ></alias>
+   <alias
+      match="^ldb reload$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_reload"
+   ></alias>
+   <alias
+      match="^ldb update(?: (check|force))?$"
+      enabled="y"
+      regexp="y"
+      sequence="100"
+      script="ldb_update"
    ></alias>
 </aliases>
 
@@ -762,12 +783,342 @@
       script="ldb_on_gqcheck_gag"
       sequence="90"
    ></trigger>
+
+   <!-- =====================================================================
+        Daily report capture: level-ups + misc reward events
+        ===================================================================== -->
+
+   <!-- Level up: line 1 -->
+   <trigger
+      name="trg_ldb_level_up"
+      match="^You raise a level! You are now level (\d+)\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_level_up"
+      sequence="100"
+   ></trigger>
+   <!-- Level up: line 2 - per-level stat gains. Two patterns: with and without instinct trains -->
+   <trigger
+      name="trg_ldb_level_gains"
+      match="^You gain (\d+) hit points, (\d+) mana, (\d+) moves, (\d+) practices? and (\d+) trains?\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_level_gains"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_level_gains_instinct"
+      match="^You gain (\d+) hit points, (\d+) mana, (\d+) moves, (\d+) practices?, (\d+) trains? and (\d+) instinct trains?\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_level_gains"
+      sequence="100"
+   ></trigger>
+
+   <!-- Gold: corpse loot -->
+   <trigger
+      name="trg_ldb_gold_mob"
+      match="^You get ([0-9,]+) gold coins? from .* of .*\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_mob"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: crumble -->
+   <trigger
+      name="trg_ldb_gold_crumble"
+      match="^.* crumbles into ([0-9,]+) gold pieces\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_crumble"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: shared (group split) -->
+   <trigger
+      name="trg_ldb_gold_shared"
+      match="^.* shares [0-9,]+ gold(?: coins?)? with .*\. Your share is ([0-9,]+) gold(?: coins?)?\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_shared"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: sell to merchant -->
+   <trigger
+      name="trg_ldb_gold_sell"
+      match="^You sell .* for ([0-9,]+) gold\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_sell"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: fence -->
+   <trigger
+      name="trg_ldb_gold_fence"
+      match="^You fenced .* items? for ([0-9,]+) gold\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_fence"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: haggle bonus -->
+   <trigger
+      name="trg_ldb_gold_haggle"
+      match="^You haggle with .* for an extra ([0-9,]+) gold\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_haggle"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: daily blessing extra -->
+   <trigger
+      name="trg_ldb_gold_db_bless"
+      match="^.* blesses you with ([0-9,]+) additional gold\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_db_bless"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: daily blessing added to corpse (offsets mob row) -->
+   <trigger
+      name="trg_ldb_gold_db_kill"
+      match="^Your daily blessing added ([0-9,]+) gold to the corpse\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_db_kill"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: clan tax (negative) -->
+   <trigger
+      name="trg_ldb_gold_tax"
+      match="^You are taxed ([0-9,]+) gold(?: coins?)? by your clan\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_tax"
+      sequence="100"
+   ></trigger>
+   <!-- Gold: epic / immortal rewards -->
+   <trigger
+      name="trg_ldb_gold_epic_suit"
+      match="^A man in a suit gives you ([0-9,]+) gold\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_gold_epic_gods"
+      match="^The gods award you with(?: an additional)? ([0-9,]+) gold coins\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_gold_epic_oradrin"
+      match="^Oradrin's Treasurer hands you ([0-9,]+) gold coins\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_gold_epic_skd"
+      match="^You are awarded .+ trains and ([0-9,]+) gold\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_gold_epic"
+      sequence="100"
+   ></trigger>
+
+   <!-- TP: bonus mob -->
+   <trigger
+      name="trg_ldb_tp_mob"
+      match="^You killed a Trivia Point bonus mob!! Trivia point added\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_tp_mob"
+      sequence="100"
+   ></trigger>
+   <!-- TP: daily blessing -->
+   <trigger
+      name="trg_ldb_tp_db"
+      match="^[\w\s]+ blesses you with a trivia point!$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_tp_db"
+      sequence="100"
+   ></trigger>
+   <!-- TP: epic / totem rewards -->
+   <trigger
+      name="trg_ldb_tp_epic_token"
+      match="^The gods award you with a(?:n additional)? Trivia Point Token\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_tp_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_tp_epic_fractal"
+      match="^You receive a Fractal Trivia Point Token from the Luminous Fractal\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_tp_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_tp_epic_skd"
+      match="^You receive Sea King's Trivia Point Token from Spectre of the Deep\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_tp_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_tp_epic_dunes"
+      match="^You manage to loot a .+ Trivia Point Token from the lair\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_tp_epic"
+      sequence="100"
+   ></trigger>
+
+   <!-- QP: daily blessing bonus -->
+   <trigger
+      name="trg_ldb_qp_db"
+      match="^.* blesses you with (\d+) bonus quest points\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_qp_db"
+      sequence="100"
+   ></trigger>
+   <!-- QP: epic (only when no quest is active) -->
+   <trigger
+      name="trg_ldb_qp_epic"
+      match="^You receive ([0-9,]+) quest points\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_qp_epic"
+      sequence="100"
+   ></trigger>
+
+   <!-- Train: daily blessing -->
+   <trigger
+      name="trg_ldb_train_db"
+      match="^You gain (\d+) extra trains? daily blessing bonus\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_train_db"
+      sequence="100"
+   ></trigger>
+   <!-- Train: epic / immortal rewards -->
+   <trigger
+      name="trg_ldb_train_epic_gods"
+      match="^The gods award you with(?: an additional)? ([0-9,]+) training sessions\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_train_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_train_epic_suit"
+      match="^A man in a suit gives you ([0-9,]+) trains\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_train_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_train_epic_oradrin"
+      match="^Oradrin's Treasurer gives you ([0-9,]+) trains\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_train_epic"
+      sequence="100"
+   ></trigger>
+   <trigger
+      name="trg_ldb_train_epic_skd"
+      match="^You are awarded ([0-9,]+) trains and .+ gold\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_train_epic"
+      sequence="100"
+   ></trigger>
+   <!-- Train: instinct deposit (informational; excluded from daily train totals) -->
+   <trigger
+      name="trg_ldb_train_instinct_deposit"
+      match="^You deposit (\d+) trains? for later use on instinct\.$"
+      enabled="y"
+      regexp="y"
+      keep_evaluating="y"
+      omit_from_output="n"
+      script="ldb_on_train_instinct_deposit"
+      sequence="100"
+   ></trigger>
 </triggers>
 
 
 <script>
 <![CDATA[
 require "gmcphelper"
+local async_ok, async = pcall(require, "async")
 
 -- =============================================================================
 -- Constants
@@ -776,6 +1127,7 @@ local GMCP_HANDLER_ID = "3e7dedbe37e44942dd46d264"
 local DB_DIR = "state\\leveldb\\"
 local DB_FILENAME = "leveldb.db"
 local PREFIX = "[LevelDB] "
+local UPDATE_URL = "https://raw.githubusercontent.com/rodarvus/leveldb/main/leveldb.xml"
 
 -- =============================================================================
 -- Plugin state (persisted via save_state)
@@ -806,6 +1158,11 @@ local cached_enemy = ""
 -- Pup tracking state
 -- =============================================================================
 local last_pup_event_id = nil    -- DB id of most recent pup_events row (for train UPDATE)
+
+-- =============================================================================
+-- Level-up tracking state
+-- =============================================================================
+local pending_level_id = nil     -- DB id of most recent level_events row awaiting per-level gain update
 
 -- =============================================================================
 -- Quest/Campaign tracking state
@@ -978,6 +1335,33 @@ local function init_tables()
          area        TEXT,
          mob_count   INTEGER DEFAULT 1
       );
+
+      CREATE TABLE IF NOT EXISTS level_events (
+         id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp              INTEGER NOT NULL,
+         level                  INTEGER NOT NULL,
+         tier                   INTEGER,
+         remort                 INTEGER,
+         redo                   INTEGER,
+         hp_gained              INTEGER,
+         mana_gained            INTEGER,
+         moves_gained           INTEGER,
+         pracs_gained           INTEGER,
+         trains_gained          INTEGER,
+         instinct_trains_gained INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS events (
+         id        INTEGER PRIMARY KEY AUTOINCREMENT,
+         timestamp INTEGER NOT NULL,
+         category  TEXT NOT NULL,
+         source    TEXT NOT NULL,
+         amount    INTEGER NOT NULL,
+         level     INTEGER,
+         tier      INTEGER,
+         remort    INTEGER,
+         redo      INTEGER
+      );
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_tables")
@@ -1034,6 +1418,10 @@ local function init_indexes()
       CREATE INDEX IF NOT EXISTS idx_gquests_remort ON gquests(remort);
       CREATE INDEX IF NOT EXISTS idx_gquests_redo ON gquests(redo);
       CREATE INDEX IF NOT EXISTS idx_gquest_mobs_gqid ON gquest_mobs(gquest_id);
+      CREATE INDEX IF NOT EXISTS idx_level_events_ts ON level_events(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_level_events_tier_remort ON level_events(tier, remort);
+      CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_events_cat_src ON events(category, source);
    ]]
    db:exec(sql)
    return not dbcheck(db:errcode(), db:errmsg(), "init_indexes")
@@ -1203,6 +1591,69 @@ local function record_pup_event(pup_data, trains_earned)
    dbcheck(db:errcode(), db:errmsg(), query)
 end
 
+-- Record a generic reward event (gold/tp/qp/train/prac) into the events table
+local function record_event(category, source, amount)
+   if not db then return end
+   if not enabled then return end
+   if not amount or amount == 0 then return end
+
+   local query = string.format(
+      "INSERT INTO events (timestamp, category, source, amount, level, tier, remort, redo) " ..
+      "VALUES (%d, %s, %s, %d, %s, %s, %s, %s)",
+      os.time(),
+      fixsql(category),
+      fixsql(source),
+      amount,
+      cached_level and tostring(cached_level) or "NULL",
+      cached_tier and tostring(cached_tier) or "NULL",
+      cached_remorts and tostring(cached_remorts) or "NULL",
+      cached_redos and tostring(cached_redos) or "NULL"
+   )
+
+   db:exec(query)
+   dbcheck(db:errcode(), db:errmsg(), query)
+end
+
+-- Insert a level_events row, return the new row id (for the per-level gain UPDATE)
+local function record_level_event(level)
+   if not db then return nil end
+   if not enabled then return nil end
+
+   local query = string.format(
+      "INSERT INTO level_events (timestamp, level, tier, remort, redo) VALUES (%d, %d, %s, %s, %s)",
+      os.time(),
+      level,
+      cached_tier and tostring(cached_tier) or "NULL",
+      cached_remorts and tostring(cached_remorts) or "NULL",
+      cached_redos and tostring(cached_redos) or "NULL"
+   )
+
+   db:exec(query)
+   if dbcheck(db:errcode(), db:errmsg(), query) then return nil end
+   return db:last_insert_rowid()
+end
+
+-- Update a level_events row with the per-level stat gains
+local function update_level_event_gains(level_event_id, hp, mana, moves, pracs, trains, instinct_trains)
+   if not db then return end
+   if not level_event_id then return end
+
+   local query = string.format(
+      "UPDATE level_events SET hp_gained = %s, mana_gained = %s, moves_gained = %s, " ..
+      "pracs_gained = %s, trains_gained = %s, instinct_trains_gained = %s WHERE id = %d",
+      hp and tostring(hp) or "NULL",
+      mana and tostring(mana) or "NULL",
+      moves and tostring(moves) or "NULL",
+      pracs and tostring(pracs) or "NULL",
+      trains and tostring(trains) or "NULL",
+      instinct_trains and tostring(instinct_trains) or "NULL",
+      level_event_id
+   )
+
+   db:exec(query)
+   dbcheck(db:errcode(), db:errmsg(), query)
+end
+
 local function end_combat()
    in_combat = false
    fight_start = nil
@@ -1332,6 +1783,7 @@ function ldb_on_sacrifice(name, line, wildcards)
    local gold = tonumber(wildcards[1])
    if gold then
       sacrifice_mob_level = gold * 2
+      record_event("gold", "sac", gold)
    end
 end
 
@@ -1375,6 +1827,113 @@ function ldb_on_pup_trains(name, line, wildcards)
    db:exec(string.format(
       "UPDATE pup_events SET trains_earned = COALESCE(trains_earned, 0) + %d WHERE id = %d",
       trains, last_pup_event_id))
+end
+
+-- =============================================================================
+-- Level-up: two-line capture
+--   Line 1: "You raise a level! You are now level N."           -- INSERT
+--   Line 2: "You gain X hp, Y mana, Z moves, P practice and T train(s)." -- UPDATE
+-- =============================================================================
+function ldb_on_level_up(name, line, wildcards)
+   if not enabled then return end
+   if not db then return end
+
+   local level = tonumber(wildcards[1])
+   if not level then return end
+
+   pending_level_id = record_level_event(level)
+
+   -- Safety: clear pending id after 2s in case the gain line never arrives
+   DoAfterSpecial(2, "pending_level_id = nil", 12)  -- 12 = sendto.script
+end
+
+function ldb_on_level_gains(name, line, wildcards)
+   if not enabled then return end
+   if not db then return end
+   if not pending_level_id then return end
+
+   local hp = tonumber(wildcards[1])
+   local mana = tonumber(wildcards[2])
+   local moves = tonumber(wildcards[3])
+   local pracs = tonumber(wildcards[4])
+   local trains = tonumber(wildcards[5])
+   local itrains = tonumber(wildcards[6])  -- nil if not present
+
+   update_level_event_gains(pending_level_id, hp, mana, moves, pracs, trains, itrains)
+   pending_level_id = nil
+end
+
+-- =============================================================================
+-- Generic event triggers — gold/tp/qp/train/prac wrappers
+-- =============================================================================
+local function clean_amount(s)
+   if not s then return nil end
+   return tonumber((s:gsub(",", "")))
+end
+
+function ldb_on_gold_mob(name, line, wildcards)
+   record_event("gold", "mob", clean_amount(wildcards[1]))
+end
+function ldb_on_gold_crumble(name, line, wildcards)
+   record_event("gold", "crumble", clean_amount(wildcards[1]))
+end
+function ldb_on_gold_shared(name, line, wildcards)
+   record_event("gold", "shared", clean_amount(wildcards[1]))
+end
+function ldb_on_gold_sell(name, line, wildcards)
+   record_event("gold", "sell", clean_amount(wildcards[1]))
+end
+function ldb_on_gold_fence(name, line, wildcards)
+   record_event("gold", "fence", clean_amount(wildcards[1]))
+end
+function ldb_on_gold_haggle(name, line, wildcards)
+   record_event("gold", "haggle", clean_amount(wildcards[1]))
+end
+function ldb_on_gold_db_bless(name, line, wildcards)
+   record_event("gold", "db_bless", clean_amount(wildcards[1]))
+end
+function ldb_on_gold_db_kill(name, line, wildcards)
+   -- Corpse gold from "You get N gold coins from .." already INCLUDES this DB bonus.
+   -- Insert two rows: +n attributed to db_kill, -n to offset the mob row.
+   local n = clean_amount(wildcards[1])
+   if not n or n == 0 then return end
+   record_event("gold", "db_kill", n)
+   record_event("gold", "mob", -n)
+end
+function ldb_on_gold_tax(name, line, wildcards)
+   local n = clean_amount(wildcards[1])
+   if n then record_event("gold", "tax", -n) end
+end
+function ldb_on_gold_epic(name, line, wildcards)
+   record_event("gold", "epic", clean_amount(wildcards[1]))
+end
+
+function ldb_on_tp_mob(name, line, wildcards)
+   record_event("tp", "mob", 1)
+end
+function ldb_on_tp_db(name, line, wildcards)
+   record_event("tp", "db", 1)
+end
+function ldb_on_tp_epic(name, line, wildcards)
+   record_event("tp", "epic", 1)
+end
+
+function ldb_on_qp_db(name, line, wildcards)
+   record_event("qp", "db", clean_amount(wildcards[1]))
+end
+function ldb_on_qp_epic(name, line, wildcards)
+   if active_quest_id then return end
+   record_event("qp", "epic", clean_amount(wildcards[1]))
+end
+
+function ldb_on_train_db(name, line, wildcards)
+   record_event("train", "db", clean_amount(wildcards[1]))
+end
+function ldb_on_train_epic(name, line, wildcards)
+   record_event("train", "epic", clean_amount(wildcards[1]))
+end
+function ldb_on_train_instinct_deposit(name, line, wildcards)
+   record_event("train", "instinct_deposit", clean_amount(wildcards[1]))
 end
 
 -- =============================================================================
@@ -2458,7 +3017,10 @@ function ldb_help(name, line, wildcards)
    ColourNote("cyan", "", "  ldb gq [filter]         - Global quest log (default: current tier & remort)")
    ColourNote("cyan", "", "  ldb gq show <id>        - Detailed view of a specific global quest")
    ColourNote("cyan", "", "  ldb deaths [N]          - Last N deaths (default 10)")
+   ColourNote("cyan", "", "  ldb daily [N]           - Per-day activity & rewards (default 7 days)")
    ColourNote("cyan", "", "  ldb db                  - Database file info")
+   ColourNote("cyan", "", "  ldb reload              - Reload the plugin in place")
+   ColourNote("cyan", "", "  ldb update [check|force]- Update from GitHub (check = no install, force = reinstall)")
    ColourNote("cyan", "", "")
    ColourNote("cyan", "", "  Filters: default = current tier, redo & remort")
    ColourNote("cyan", "", "    all                   - All tiers and remorts (separate sections)")
@@ -4459,6 +5021,373 @@ function ldb_db_info(name, line, wildcards)
    for row in db:nrows("SELECT COUNT(*) as cnt FROM gquests") do
       ColourNote("white", "", "  GQuests: " .. format_number(row.cnt))
    end
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM pup_events") do
+      ColourNote("white", "", "  Pup events: " .. format_number(row.cnt))
+   end
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM level_events") do
+      ColourNote("white", "", "  Level events: " .. format_number(row.cnt))
+   end
+   for row in db:nrows("SELECT COUNT(*) as cnt FROM events") do
+      ColourNote("white", "", "  Events: " .. format_number(row.cnt))
+   end
+end
+
+-- =============================================================================
+-- Command: ldb daily [N]   (default 7 days)
+-- =============================================================================
+
+-- SQL date expression: 'YYYY-MM-DD' in local time from a unix-epoch column
+local function day_expr(col)
+   return string.format("date(%s,'unixepoch','localtime')", col)
+end
+
+-- Enumerate the last N days (most recent first) -- Lua list of 'YYYY-MM-DD'
+local function enumerate_days(n)
+   local days = {}
+   local now_t = os.date('*t', os.time())
+   for i = 0, n - 1 do
+      local tt = {year = now_t.year, month = now_t.month, day = now_t.day - i, hour = 12}
+      table.insert(days, os.date('%Y-%m-%d', os.time(tt)))
+   end
+   return days
+end
+
+-- Run a query, return map of day -> row
+local function query_by_day(sql)
+   local out = {}
+   for row in db:nrows(sql) do
+      out[row.day] = row
+   end
+   return out
+end
+
+-- Render value as '-' for nil/zero
+local function ndash(n)
+   if not n or n == 0 then return "-" end
+   return format_number(n)
+end
+
+-- Compact abbrev: 1.2M / 234K / 567
+local function compact(n)
+   if not n or n == 0 then return "-" end
+   local abs_n = math.abs(n)
+   local sign = n < 0 and "-" or ""
+   if abs_n >= 1000000 then
+      return sign .. string.format("%.1fM", abs_n / 1000000)
+   elseif abs_n >= 1000 then
+      return sign .. string.format("%.0fK", abs_n / 1000)
+   end
+   return sign .. tostring(math.floor(abs_n))
+end
+
+-- "X/Y" with '-' if total is 0
+local function ratio2(num, total)
+   if (total or 0) == 0 then return "-" end
+   return string.format("%d/%d", num or 0, total or 0)
+end
+
+local function render_daily_counts(days)
+   local n = #days
+   local where = string.format(
+      "WHERE %s >= date('now','-%d days','localtime')",
+      day_expr("timestamp"), n - 1)
+
+   local kills = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COUNT(*) AS cnt FROM kills " ..
+      where .. " GROUP BY day")
+   local deaths = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COUNT(*) AS cnt FROM deaths " ..
+      where .. " GROUP BY day")
+   local lvls = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COUNT(*) AS cnt FROM level_events " ..
+      where .. " GROUP BY day")
+   local pups = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COUNT(*) AS cnt FROM pup_events " ..
+      where .. " GROUP BY day")
+   local quests = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COUNT(*) AS total, " ..
+      "SUM(CASE WHEN result='completed' THEN 1 ELSE 0 END) AS comp " ..
+      "FROM quests " .. where .. " GROUP BY day")
+   local cps = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COUNT(*) AS total, " ..
+      "SUM(CASE WHEN result='completed' THEN 1 ELSE 0 END) AS comp " ..
+      "FROM campaigns " .. where .. " GROUP BY day")
+   local gqs = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COUNT(*) AS total, " ..
+      "SUM(CASE WHEN result='won' THEN 1 ELSE 0 END) AS won, " ..
+      "SUM(CASE WHEN result='completed' THEN 1 ELSE 0 END) AS comp " ..
+      "FROM gquests " .. where .. " GROUP BY day")
+   local gold_q = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(gold),0) AS amt FROM quests " ..
+      where .. " AND result='completed' GROUP BY day")
+   local gold_cp = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(gold),0) AS amt FROM campaigns " ..
+      where .. " AND result='completed' GROUP BY day")
+   local gold_gq = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(gold),0) AS amt FROM gquests " ..
+      where .. " AND result IN ('won','completed') GROUP BY day")
+   local gold_misc = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(amount),0) AS amt FROM events " ..
+      where .. " AND category='gold' GROUP BY day")
+
+   local today = os.date('%Y-%m-%d')
+   ColourNote("cyan", "", string.format("%sDaily activity (last %d days, ending %s):", PREFIX, n, today))
+   local fmt = "  %-11s %5s  %5s  %4s  %4s  %7s  %7s  %9s  %8s"
+   ColourNote("cyan", "", string.format(fmt, "Date", "Kills", "Deaths", "Lvl", "Pup",
+      "Quests", "CPs", "GQs", "Gold"))
+   ColourNote("cyan", "", string.format(fmt, "----------", "-----", "------", "----", "----",
+      "-------", "-------", "---------", "--------"))
+
+   for i = #days, 1, -1 do
+      local d = days[i]
+      local is_today = (d == today)
+      local date_label = is_today and (d .. "*") or (d .. " ")
+      local k = (kills[d] or {}).cnt or 0
+      local de = (deaths[d] or {}).cnt or 0
+      local lv = (lvls[d] or {}).cnt or 0
+      local pu = (pups[d] or {}).cnt or 0
+      local q = quests[d] or {}
+      local cp = cps[d] or {}
+      local gq = gqs[d] or {}
+      local gold_total = ((gold_q[d] or {}).amt or 0) + ((gold_cp[d] or {}).amt or 0)
+                       + ((gold_gq[d] or {}).amt or 0) + ((gold_misc[d] or {}).amt or 0)
+      local gq_str = (gq.total or 0) == 0 and "-"
+         or string.format("%d/%d/%d", gq.won or 0, gq.comp or 0, gq.total or 0)
+      local row = string.format(fmt, date_label,
+         ndash(k), ndash(de), ndash(lv), ndash(pu),
+         ratio2(q.comp, q.total), ratio2(cp.comp, cp.total), gq_str,
+         compact(gold_total))
+      ColourNote(is_today and "yellow" or "white", "", row)
+   end
+end
+
+local function render_daily_rewards(days)
+   local n = #days
+   local where = string.format(
+      "WHERE %s >= date('now','-%d days','localtime')",
+      day_expr("timestamp"), n - 1)
+
+   local xp = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(xp_gained),0) AS amt FROM kills " ..
+      where .. " GROUP BY day")
+   local qp_q = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(qp),0) AS amt FROM quests " ..
+      where .. " AND result='completed' GROUP BY day")
+   local qp_cp = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(qp),0) AS amt FROM campaigns " ..
+      where .. " AND result='completed' GROUP BY day")
+   local qp_gq = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(qp),0) AS amt FROM gquests " ..
+      where .. " AND result IN ('won','completed') GROUP BY day")
+   local qp_other = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(amount),0) AS amt FROM events " ..
+      where .. " AND category='qp' GROUP BY day")
+   local tp_q = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(tp),0) AS amt FROM quests " ..
+      where .. " AND result='completed' GROUP BY day")
+   local tp_cp = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(tp),0) AS amt FROM campaigns " ..
+      where .. " AND result='completed' GROUP BY day")
+   local tp_gq = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(tp),0) AS amt FROM gquests " ..
+      where .. " AND result IN ('won','completed') GROUP BY day")
+   local tp_other = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(amount),0) AS amt FROM events " ..
+      where .. " AND category='tp' GROUP BY day")
+   local tr_lvl = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(trains_gained),0) AS amt FROM level_events " ..
+      where .. " GROUP BY day")
+   local tr_pup = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(trains_earned),0) AS amt FROM pup_events " ..
+      where .. " GROUP BY day")
+   local tr_q = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(trains),0) AS amt FROM quests " ..
+      where .. " AND result='completed' GROUP BY day")
+   local tr_cp = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(trains),0) AS amt FROM campaigns " ..
+      where .. " AND result='completed' GROUP BY day")
+   local tr_gq = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(trains),0) AS amt FROM gquests " ..
+      where .. " AND result IN ('won','completed') GROUP BY day")
+   local tr_other = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(amount),0) AS amt FROM events " ..
+      where .. " AND category='train' AND source != 'instinct_deposit' GROUP BY day")
+   local pr_lvl = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(pracs_gained),0) AS amt FROM level_events " ..
+      where .. " GROUP BY day")
+   local pr_q = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(pracs),0) AS amt FROM quests " ..
+      where .. " AND result='completed' GROUP BY day")
+   local pr_cp = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(pracs),0) AS amt FROM campaigns " ..
+      where .. " AND result='completed' GROUP BY day")
+   local pr_other = query_by_day(
+      "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(amount),0) AS amt FROM events " ..
+      where .. " AND category='prac' GROUP BY day")
+
+   local today = os.date('%Y-%m-%d')
+   ColourNote("cyan", "", string.format("%sDaily rewards (last %d days):", PREFIX, n))
+   local fmt = "  %-11s %6s  %6s  %5s  %5s  %5s  %5s  %5s  %6s  %5s"
+   ColourNote("cyan", "", string.format(fmt, "Date", "XP", "QP",
+      "Q", "CP", "GQ", "oth", "TP", "Trains", "Pracs"))
+   ColourNote("cyan", "", string.format(fmt, "----------", "------", "------",
+      "-----", "-----", "-----", "-----", "-----", "------", "-----"))
+
+   for i = #days, 1, -1 do
+      local d = days[i]
+      local is_today = (d == today)
+      local date_label = is_today and (d .. "*") or (d .. " ")
+      local xp_v = (xp[d] or {}).amt or 0
+      local q_v = (qp_q[d] or {}).amt or 0
+      local cp_v = (qp_cp[d] or {}).amt or 0
+      local gq_v = (qp_gq[d] or {}).amt or 0
+      local oth_v = (qp_other[d] or {}).amt or 0
+      local qp_total = q_v + cp_v + gq_v + oth_v
+      local tp_total = ((tp_q[d] or {}).amt or 0) + ((tp_cp[d] or {}).amt or 0)
+                     + ((tp_gq[d] or {}).amt or 0) + ((tp_other[d] or {}).amt or 0)
+      local tr_total = ((tr_lvl[d] or {}).amt or 0) + ((tr_pup[d] or {}).amt or 0)
+                     + ((tr_q[d] or {}).amt or 0) + ((tr_cp[d] or {}).amt or 0)
+                     + ((tr_gq[d] or {}).amt or 0) + ((tr_other[d] or {}).amt or 0)
+      local pr_total = ((pr_lvl[d] or {}).amt or 0) + ((pr_q[d] or {}).amt or 0)
+                     + ((pr_cp[d] or {}).amt or 0) + ((pr_other[d] or {}).amt or 0)
+
+      local row = string.format(fmt, date_label,
+         compact(xp_v), ndash(qp_total),
+         ndash(q_v), ndash(cp_v), ndash(gq_v), ndash(oth_v),
+         ndash(tp_total), ndash(tr_total), ndash(pr_total))
+      ColourNote(is_today and "yellow" or "white", "", row)
+   end
+end
+
+function ldb_daily(name, line, wildcards)
+   if not require_db() then return end
+   local n = tonumber(wildcards[1]) or 7
+   if n < 1 then n = 1 end
+   if n > 365 then n = 365 end
+   local days = enumerate_days(n)
+   render_daily_counts(days)
+   Note("")
+   render_daily_rewards(days)
+end
+
+-- =============================================================================
+-- Command: ldb reload — reload the plugin in place
+-- =============================================================================
+local function trigger_reload()
+   if GetAlphaOption("script_prefix") == "" then
+      SetAlphaOption("script_prefix", "\\\\\\")
+   end
+   Execute(GetAlphaOption("script_prefix") ..
+      'DoAfterSpecial(1, "ReloadPlugin(\'' .. GetPluginID() .. '\')", sendto.script)')
+end
+
+function ldb_reload(name, line, wildcards)
+   ColourNote("cyan", "", PREFIX .. "Reloading plugin...")
+   trigger_reload()
+end
+
+-- =============================================================================
+-- Command: ldb update [check|force]
+--   ldb update          - check GitHub; install only if upstream is NEWER
+--   ldb update check    - report only; never install
+--   ldb update force    - reinstall upstream regardless of version
+-- =============================================================================
+local function parse_upstream_version(page)
+   return string.match(page, '<plugin[^>]-version="([0-9%.]+)"')
+end
+
+-- Compare dotted-decimal versions ("9.10" > "9.2"); returns -1/0/1
+local function compare_versions(a, b)
+   local function parts(v)
+      local r = {}
+      for n in tostring(v):gmatch("(%d+)") do
+         table.insert(r, tonumber(n))
+      end
+      return r
+   end
+   local pa, pb = parts(a), parts(b)
+   for i = 1, math.max(#pa, #pb) do
+      local ai, bi = pa[i] or 0, pb[i] or 0
+      if ai ~= bi then return ai < bi and -1 or 1 end
+   end
+   return 0
+end
+
+local function install_upstream(page, upstream_version, current_version)
+   local file_path = GetPluginInfo(GetPluginID(), 6)
+   local f, err = io.open(file_path, "w")
+   if not f then
+      ColourNote("red", "", PREFIX .. "Failed to open plugin file for writing: " .. tostring(err))
+      return
+   end
+   f:write(page)
+   f:close()
+   ColourNote("green", "", string.format("%sUpdated v%s -> v%s. Reloading...",
+      PREFIX, current_version, upstream_version))
+   trigger_reload()
+end
+
+function ldb_update(name, line, wildcards)
+   if not async_ok then
+      ColourNote("red", "", PREFIX .. "async library not available; cannot fetch update.")
+      return
+   end
+
+   local mode = wildcards[1] or ""  -- "", "check", or "force"
+   ColourNote("cyan", "", PREFIX .. "Fetching " .. UPDATE_URL .. "...")
+
+   async.doAsyncRemoteRequest(UPDATE_URL, function(retval, page, status, headers, full_status, request_url)
+      if status ~= 200 then
+         ColourNote("red", "", string.format("%sFetch failed: HTTP %s", PREFIX, tostring(status)))
+         return
+      end
+      if not page or page == "" then
+         ColourNote("red", "", PREFIX .. "Empty response.")
+         return
+      end
+
+      local upstream_version = parse_upstream_version(page)
+      if not upstream_version then
+         ColourNote("red", "", PREFIX .. "Could not parse upstream version from XML.")
+         return
+      end
+
+      local current_version = GetPluginInfo(GetPluginID(), 19)
+      local cmp = compare_versions(upstream_version, current_version)
+
+      if mode == "check" then
+         if cmp == 0 then
+            ColourNote("cyan", "", string.format("%sUp to date (v%s).", PREFIX, current_version))
+         elseif cmp < 0 then
+            ColourNote("cyan", "", string.format(
+               "%sLocal v%s is newer than upstream v%s (no install).",
+               PREFIX, current_version, upstream_version))
+         else
+            ColourNote("yellow", "", string.format(
+               "%sUpdate available: v%s -> v%s. Run 'ldb update' to install.",
+               PREFIX, current_version, upstream_version))
+         end
+         return
+      end
+
+      if mode == "force" then
+         install_upstream(page, upstream_version, current_version)
+         return
+      end
+
+      -- Bare 'ldb update': only install if upstream is strictly newer
+      if cmp == 0 then
+         ColourNote("cyan", "", string.format("%sUp to date (v%s).", PREFIX, current_version))
+         return
+      elseif cmp < 0 then
+         ColourNote("cyan", "", string.format(
+            "%sLocal v%s is newer than upstream v%s. Use 'ldb update force' to downgrade.",
+            PREFIX, current_version, upstream_version))
+         return
+      end
+
+      install_upstream(page, upstream_version, current_version)
+   end, "HTTPS")
 end
 
 -- =============================================================================
