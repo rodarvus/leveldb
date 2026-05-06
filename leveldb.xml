@@ -4113,11 +4113,11 @@ function ldb_quests(name, line, wildcards)
       where = string.format("tier = %d AND %s", filter.tier, redo_where(filter.redo or 0))
    end
 
-   -- Fetch quests in chronological order (cap at 50)
+   -- Fetch quests in chronological order
    local quests = {}
    for row in db:nrows(
       "SELECT id, timestamp, level, mob_name, area, result, qp, gold, tp, duration " ..
-      "FROM quests WHERE " .. where .. " ORDER BY timestamp LIMIT 50") do
+      "FROM quests WHERE " .. where .. " ORDER BY timestamp") do
       table.insert(quests, row)
    end
 
@@ -4267,11 +4267,11 @@ function ldb_campaigns(name, line, wildcards)
       where = string.format("tier = %d AND %s", filter.tier, redo_where(filter.redo or 0))
    end
 
-   -- Fetch campaigns in chronological order (cap at 50)
+   -- Fetch campaigns in chronological order
    local campaigns = {}
    for row in db:nrows(
       "SELECT id, timestamp, level, result, mob_count, qp, gold, tp, duration " ..
-      "FROM campaigns WHERE " .. where .. " ORDER BY timestamp LIMIT 50") do
+      "FROM campaigns WHERE " .. where .. " ORDER BY timestamp") do
       table.insert(campaigns, row)
    end
 
@@ -4502,11 +4502,11 @@ function ldb_gquests(name, line, wildcards)
       where = string.format("tier = %d AND %s", filter.tier, redo_where(filter.redo or 0))
    end
 
-   -- Fetch gquests in chronological order (cap at 50)
+   -- Fetch gquests in chronological order
    local gquests = {}
    for row in db:nrows(
       "SELECT id, timestamp, level, gq_number, result, mob_count, qp, gold, tp, duration " ..
-      "FROM gquests WHERE " .. where .. " ORDER BY timestamp LIMIT 50") do
+      "FROM gquests WHERE " .. where .. " ORDER BY timestamp") do
       table.insert(gquests, row)
    end
 
