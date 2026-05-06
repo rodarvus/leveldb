@@ -5649,6 +5649,73 @@ local function ratio2(num, total)
    return string.format("%d/%d", num or 0, total or 0)
 end
 
+-- Render a daily table (counts or rewards). Date column is always shown; data
+-- columns whose `nonzero(day)` returns false for every day in the window are
+-- hidden entirely (header, separator, and per-row cell all disappear).
+--
+-- Each column: {header, width, align="left|right" (default "right"),
+--               nonzero=fn(d)->bool, format=fn(d)->string, fg=fn(d,is_today)->color}
+local function render_daily_table(title, days, columns)
+   local today = os.date('%Y-%m-%d')
+   ColourNote("cyan", "", title)
+
+   -- Filter out columns that are empty across the entire window
+   local visible = {}
+   for _, col in ipairs(columns) do
+      local has_data = false
+      for _, d in ipairs(days) do
+         if col.nonzero(d) then has_data = true; break end
+      end
+      if has_data then table.insert(visible, col) end
+   end
+
+   if #visible == 0 then
+      ColourNote("yellow", "", "  (No data in this window.)")
+      return
+   end
+
+   local DATE_W = 11
+
+   local function pad(text, width, align)
+      local fmt = "%" .. (align == "left" and "-" or "") .. width .. "s"
+      return string.format(fmt, text)
+   end
+
+   -- Header + separator
+   local hdr = "  " .. pad("Date", DATE_W, "left")
+   local sep = "  " .. pad(string.rep("-", DATE_W), DATE_W, "left")
+   for _, col in ipairs(visible) do
+      hdr = hdr .. "  " .. pad(col.header, col.width, col.align)
+      sep = sep .. "  " .. pad(string.rep("-", col.width), col.width, col.align)
+   end
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
+
+   -- Render oldest -> newest (today at bottom). Bg alternates by row index.
+   local row_idx = 0
+   for i = #days, 1, -1 do
+      row_idx = row_idx + 1
+      local d = days[i]
+      local is_today = (d == today)
+      local date_label = is_today and (d .. "*") or (d .. " ")
+      local date_fg = is_today and PALETTE.active or PALETTE.text_fg
+      local bg = row_bg(row_idx)
+
+      local cells = {
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = pad(date_label, DATE_W, "left"), fg = date_fg},
+      }
+      for _, col in ipairs(visible) do
+         table.insert(cells, {text = "  ", fg = PALETTE.text_fg})
+         table.insert(cells, {
+            text = pad(col.format(d), col.width, col.align),
+            fg = col.fg(d, is_today),
+         })
+      end
+      emit_row(cells, bg)
+   end
+end
+
 local function render_daily_counts(days)
    local n = #days
    local where = string.format(
@@ -5694,62 +5761,54 @@ local function render_daily_counts(days)
       where .. " AND category='gold' GROUP BY day")
 
    local today = os.date('%Y-%m-%d')
-   ColourNote("cyan", "", string.format("%sDaily activity (last %d days, ending %s):", PREFIX, n, today))
+   local title = string.format("%sDaily activity (last %d days, ending %s):", PREFIX, n, today)
 
-   local hdr_text = string.format(
-      "  %-11s %5s  %5s  %4s  %4s  %7s  %7s  %9s  %8s",
-      "Date", "Kills", "Deaths", "Lvl", "Pup", "Quests", "CPs", "GQs", "Gold")
-   local sep = string.format(
-      "  %-11s %5s  %5s  %4s  %4s  %7s  %7s  %9s  %8s",
-      "----------", "-----", "------", "----", "----",
-      "-------", "-------", "---------", "--------")
-   ColourNote(PALETTE.header_fg, "", hdr_text)
-   ColourNote(PALETTE.sep_fg, "", sep)
-
-   -- Render oldest -> newest (today at bottom). Bg alternates by row index.
-   local row_idx = 0
-   for i = #days, 1, -1 do
-      row_idx = row_idx + 1
-      local d = days[i]
-      local is_today = (d == today)
-      local date_label = is_today and (d .. "*") or (d .. " ")
-      local date_fg = is_today and PALETTE.active or PALETTE.text_fg
-      local k = (kills[d] or {}).cnt or 0
-      local de = (deaths[d] or {}).cnt or 0
-      local lv = (lvls[d] or {}).cnt or 0
-      local pu = (pups[d] or {}).cnt or 0
-      local q = quests[d] or {}
-      local cp = cps[d] or {}
-      local gq = gqs[d] or {}
-      local gold_total = ((gold_q[d] or {}).amt or 0) + ((gold_cp[d] or {}).amt or 0)
-                       + ((gold_gq[d] or {}).amt or 0) + ((gold_misc[d] or {}).amt or 0)
-      local gq_str = (gq.total or 0) == 0 and "-"
-         or string.format("%d/%d/%d", gq.won or 0, gq.comp or 0, gq.total or 0)
-      local bg = row_bg(row_idx)
-      -- Death cell goes red when nonzero so it draws the eye
-      local de_fg = (de > 0) and PALETTE.failed or PALETTE.number_fg
-
-      emit_row({
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%-11s", date_label), fg = date_fg},
-         {text = " ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(k)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(de)), fg = de_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%4s", ndash(lv)), fg = PALETTE.completed},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%4s", ndash(pu)), fg = PALETTE.completed},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%7s", ratio2(q.comp, q.total)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%7s", ratio2(cp.comp, cp.total)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%9s", gq_str), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%8s", compact(gold_total)), fg = PALETTE.number_fg},
-      }, bg)
+   local function getn(t, d, key) return ((t[d] or {})[key]) or 0 end
+   local function gold_total(d)
+      return getn(gold_q, d, "amt") + getn(gold_cp, d, "amt")
+           + getn(gold_gq, d, "amt") + getn(gold_misc, d, "amt")
    end
+
+   local columns = {
+      {header = "Kills",  width = 5, align = "right",
+         nonzero = function(d) return getn(kills, d, "cnt") > 0 end,
+         format  = function(d) return ndash(getn(kills, d, "cnt")) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "Deaths", width = 5, align = "right",
+         nonzero = function(d) return getn(deaths, d, "cnt") > 0 end,
+         format  = function(d) return ndash(getn(deaths, d, "cnt")) end,
+         fg      = function(d) return getn(deaths, d, "cnt") > 0 and PALETTE.failed or PALETTE.number_fg end},
+      {header = "Lvl",    width = 4, align = "right",
+         nonzero = function(d) return getn(lvls, d, "cnt") > 0 end,
+         format  = function(d) return ndash(getn(lvls, d, "cnt")) end,
+         fg      = function() return PALETTE.completed end},
+      {header = "Pup",    width = 4, align = "right",
+         nonzero = function(d) return getn(pups, d, "cnt") > 0 end,
+         format  = function(d) return ndash(getn(pups, d, "cnt")) end,
+         fg      = function() return PALETTE.completed end},
+      {header = "Quests", width = 7, align = "right",
+         nonzero = function(d) return getn(quests, d, "total") > 0 end,
+         format  = function(d) return ratio2(getn(quests, d, "comp"), getn(quests, d, "total")) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "CPs",    width = 7, align = "right",
+         nonzero = function(d) return getn(cps, d, "total") > 0 end,
+         format  = function(d) return ratio2(getn(cps, d, "comp"), getn(cps, d, "total")) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "GQs",    width = 9, align = "right",
+         nonzero = function(d) return getn(gqs, d, "total") > 0 end,
+         format  = function(d)
+            local gq = gqs[d] or {}
+            if (gq.total or 0) == 0 then return "-" end
+            return string.format("%d/%d/%d", gq.won or 0, gq.comp or 0, gq.total or 0)
+         end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "Gold",   width = 8, align = "right",
+         nonzero = function(d) return gold_total(d) > 0 end,
+         format  = function(d) return compact(gold_total(d)) end,
+         fg      = function() return PALETTE.number_fg end},
+   }
+
+   render_daily_table(title, days, columns)
 end
 
 local function render_daily_rewards(days)
@@ -5816,64 +5875,63 @@ local function render_daily_rewards(days)
       "SELECT " .. day_expr("timestamp") .. " AS day, COALESCE(SUM(amount),0) AS amt FROM events " ..
       where .. " AND category='prac' GROUP BY day")
 
-   local today = os.date('%Y-%m-%d')
-   ColourNote("cyan", "", string.format("%sDaily rewards (last %d days):", PREFIX, n))
+   local title = string.format("%sDaily rewards (last %d days):", PREFIX, n)
 
-   local hdr_text = string.format(
-      "  %-11s %6s  %6s  %5s  %5s  %5s  %5s  %5s  %6s  %5s",
-      "Date", "XP", "QP", "Q", "CP", "GQ", "oth", "TP", "Trains", "Pracs")
-   local sep = string.format(
-      "  %-11s %6s  %6s  %5s  %5s  %5s  %5s  %5s  %6s  %5s",
-      "----------", "------", "------",
-      "-----", "-----", "-----", "-----", "-----", "------", "-----")
-   ColourNote(PALETTE.header_fg, "", hdr_text)
-   ColourNote(PALETTE.sep_fg, "", sep)
-
-   local row_idx = 0
-   for i = #days, 1, -1 do
-      row_idx = row_idx + 1
-      local d = days[i]
-      local is_today = (d == today)
-      local date_label = is_today and (d .. "*") or (d .. " ")
-      local date_fg = is_today and PALETTE.active or PALETTE.text_fg
-      local xp_v = (xp[d] or {}).amt or 0
-      local q_v = (qp_q[d] or {}).amt or 0
-      local cp_v = (qp_cp[d] or {}).amt or 0
-      local gq_v = (qp_gq[d] or {}).amt or 0
-      local oth_v = (qp_other[d] or {}).amt or 0
-      local qp_total = q_v + cp_v + gq_v + oth_v
-      local tp_total = ((tp_q[d] or {}).amt or 0) + ((tp_cp[d] or {}).amt or 0)
-                     + ((tp_gq[d] or {}).amt or 0) + ((tp_other[d] or {}).amt or 0)
-      local tr_total = ((tr_lvl[d] or {}).amt or 0) + ((tr_pup[d] or {}).amt or 0)
-                     + ((tr_q[d] or {}).amt or 0) + ((tr_cp[d] or {}).amt or 0)
-                     + ((tr_gq[d] or {}).amt or 0) + ((tr_other[d] or {}).amt or 0)
-      local pr_total = ((pr_lvl[d] or {}).amt or 0) + ((pr_q[d] or {}).amt or 0)
-                     + ((pr_cp[d] or {}).amt or 0) + ((pr_other[d] or {}).amt or 0)
-      local bg = row_bg(row_idx)
-
-      emit_row({
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%-11s", date_label), fg = date_fg},
-         {text = " ", fg = PALETTE.text_fg},
-         {text = string.format("%6s", compact(xp_v)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%6s", ndash(qp_total)), fg = PALETTE.completed},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(q_v)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(cp_v)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(gq_v)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(oth_v)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(tp_total)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%6s", ndash(tr_total)), fg = PALETTE.number_fg},
-         {text = "  ", fg = PALETTE.text_fg},
-         {text = string.format("%5s", ndash(pr_total)), fg = PALETTE.number_fg},
-      }, bg)
+   local function getn(t, d) return ((t[d] or {}).amt) or 0 end
+   local function qp_total(d)
+      return getn(qp_q, d) + getn(qp_cp, d) + getn(qp_gq, d) + getn(qp_other, d)
    end
+   local function tp_total(d)
+      return getn(tp_q, d) + getn(tp_cp, d) + getn(tp_gq, d) + getn(tp_other, d)
+   end
+   local function tr_total(d)
+      return getn(tr_lvl, d) + getn(tr_pup, d) + getn(tr_q, d)
+           + getn(tr_cp, d) + getn(tr_gq, d) + getn(tr_other, d)
+   end
+   local function pr_total(d)
+      return getn(pr_lvl, d) + getn(pr_q, d) + getn(pr_cp, d) + getn(pr_other, d)
+   end
+
+   local columns = {
+      {header = "XP",     width = 6, align = "right",
+         nonzero = function(d) return getn(xp, d) > 0 end,
+         format  = function(d) return compact(getn(xp, d)) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "QP",     width = 6, align = "right",
+         nonzero = function(d) return qp_total(d) > 0 end,
+         format  = function(d) return ndash(qp_total(d)) end,
+         fg      = function() return PALETTE.completed end},
+      {header = "Q",      width = 5, align = "right",
+         nonzero = function(d) return getn(qp_q, d) > 0 end,
+         format  = function(d) return ndash(getn(qp_q, d)) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "CP",     width = 5, align = "right",
+         nonzero = function(d) return getn(qp_cp, d) > 0 end,
+         format  = function(d) return ndash(getn(qp_cp, d)) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "GQ",     width = 5, align = "right",
+         nonzero = function(d) return getn(qp_gq, d) > 0 end,
+         format  = function(d) return ndash(getn(qp_gq, d)) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "oth",    width = 5, align = "right",
+         nonzero = function(d) return getn(qp_other, d) > 0 end,
+         format  = function(d) return ndash(getn(qp_other, d)) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "TP",     width = 5, align = "right",
+         nonzero = function(d) return tp_total(d) > 0 end,
+         format  = function(d) return ndash(tp_total(d)) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "Trains", width = 6, align = "right",
+         nonzero = function(d) return tr_total(d) > 0 end,
+         format  = function(d) return ndash(tr_total(d)) end,
+         fg      = function() return PALETTE.number_fg end},
+      {header = "Pracs",  width = 5, align = "right",
+         nonzero = function(d) return pr_total(d) > 0 end,
+         format  = function(d) return ndash(pr_total(d)) end,
+         fg      = function() return PALETTE.number_fg end},
+   }
+
+   render_daily_table(title, days, columns)
 end
 
 function ldb_daily(name, line, wildcards)
