@@ -2786,6 +2786,51 @@ function delayed_gq_info()
 end
 
 -- =============================================================================
+-- Tabular rendering palette + row helper (S&D-style alt rows + per-cell color)
+--
+-- Colors can be overridden via SetVariable("ldb_palette_<key>", "#hex") and
+-- a reload, e.g. SetVariable("ldb_palette_alt_row_bg", "#000000") to disable
+-- the alt-row background entirely.
+-- =============================================================================
+local function palette_get(key, default)
+   local v = GetVariable("ldb_palette_" .. key)
+   if v and v ~= "" then return v end
+   return default
+end
+
+local PALETTE = {
+   header_fg  = palette_get("header_fg",  "#808080"),
+   sep_fg     = palette_get("sep_fg",     "#808080"),
+   alt_row_bg = palette_get("alt_row_bg", "#000040"),
+   text_fg    = palette_get("text_fg",    "#E0E0E0"),
+   id_fg      = palette_get("id_fg",      "#A0A0A0"),
+   number_fg  = palette_get("number_fg",  "#C0C0C0"),
+   mob_fg     = palette_get("mob_fg",     "#87CEEB"),
+   completed  = palette_get("completed",  "#7CFC00"),
+   failed     = palette_get("failed",     "#FF6060"),
+   timeout    = palette_get("timeout",    "#FFAA40"),
+   unknown    = palette_get("unknown",    "#FFC000"),
+   active     = palette_get("active",     "#00FF00"),
+   summary_fg = palette_get("summary_fg", "#D0D0D0"),
+}
+
+-- Background for row index i (1-based). Alt rows on even indices.
+local function row_bg(i)
+   if i % 2 == 0 then return PALETTE.alt_row_bg end
+   return ""
+end
+
+-- Emit a single line composed of cells: each cell is {text=, fg=, bg=}.
+-- Cells inherit `default_bg` unless they specify their own bg.
+-- Finishes the line with Note("") to flush a newline.
+local function emit_row(cells, default_bg)
+   for _, c in ipairs(cells) do
+      ColourTell(c.fg or PALETTE.text_fg, c.bg or default_bg or "", c.text or "")
+   end
+   Note("")
+end
+
+-- =============================================================================
 -- Helper: format number with commas
 -- =============================================================================
 local function format_number(n)
@@ -2925,8 +2970,16 @@ end
 -- =============================================================================
 function ldb_status(name, line, wildcards)
    ColourNote("cyan", "", PREFIX .. "Status")
-   ColourNote("cyan", "", "  Enabled: " .. (enabled and "ON" or "OFF"))
-   ColourNote("cyan", "", "  Database: " .. (db_path or "(none)"))
+
+   local function detail(label, value, value_fg)
+      ColourTell(PALETTE.summary_fg, "", "  " .. label)
+      ColourTell(value_fg or PALETTE.text_fg, "", value)
+      Note("")
+   end
+
+   detail("Enabled:           ", enabled and "ON" or "OFF",
+      enabled and PALETTE.completed or PALETTE.failed)
+   detail("Database:          ", db_path or "(none)", PALETTE.id_fg)
 
    if db then
       local kill_count = 0
@@ -2937,8 +2990,9 @@ function ldb_status(name, line, wildcards)
       for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths") do
          death_count = row.cnt
       end
-      ColourNote("cyan", "", "  Kills recorded: " .. format_number(kill_count))
-      ColourNote("cyan", "", "  Deaths recorded: " .. format_number(death_count))
+      detail("Kills recorded:    ", format_number(kill_count), PALETTE.number_fg)
+      detail("Deaths recorded:   ", format_number(death_count),
+         death_count > 0 and PALETTE.failed or PALETTE.number_fg)
 
       local quest_count = 0
       local campaign_count = 0
@@ -2948,40 +3002,42 @@ function ldb_status(name, line, wildcards)
       for row in db:nrows("SELECT COUNT(*) as cnt FROM campaigns") do
          campaign_count = row.cnt
       end
-      ColourNote("cyan", "", "  Quests recorded: " .. format_number(quest_count))
-      ColourNote("cyan", "", "  Campaigns recorded: " .. format_number(campaign_count))
+      detail("Quests recorded:   ", format_number(quest_count), PALETTE.number_fg)
+      detail("Campaigns recorded:", format_number(campaign_count), PALETTE.number_fg)
 
       local pup_event_count = 0
       for row in db:nrows("SELECT COUNT(*) as cnt FROM pup_events") do
          pup_event_count = row.cnt
       end
-      ColourNote("cyan", "", "  Pup events recorded: " .. format_number(pup_event_count))
+      detail("Pup events:        ", format_number(pup_event_count), PALETTE.number_fg)
 
       local gquest_count = 0
       for row in db:nrows("SELECT COUNT(*) as cnt FROM gquests") do
          gquest_count = row.cnt
       end
-      ColourNote("cyan", "", "  GQuests recorded: " .. format_number(gquest_count))
+      detail("GQuests recorded:  ", format_number(gquest_count), PALETTE.number_fg)
    end
 
    if cached_level then
-      ColourNote("cyan", "", "  Current level: " .. cached_level)
+      detail("Current level:     ", tostring(cached_level), PALETTE.completed)
       if cached_redos and cached_redos > 0 then
-         ColourNote("cyan", "", "  Current redo: " .. cached_redos)
+         detail("Current redo:      ", tostring(cached_redos), PALETTE.number_fg)
       end
       if cached_level >= 200 and cached_pups then
-         ColourNote("cyan", "", "  Current powerup: " .. cached_pups)
+         detail("Current powerup:   ", tostring(cached_pups), PALETTE.completed)
          if cached_tnl and cached_perlevel then
-            ColourNote("cyan", "", "  TNL: " .. cached_tnl .. " / " .. cached_perlevel)
+            detail("TNL:               ",
+               cached_tnl .. " / " .. cached_perlevel, PALETTE.number_fg)
          end
       end
    end
    if cached_zone then
-      ColourNote("cyan", "", "  Current zone: " .. cached_zone)
+      detail("Current zone:      ", cached_zone, PALETTE.text_fg)
    end
    if in_combat and fight_start then
-      ColourNote("cyan", "", "  In combat: " .. fight_start.enemy ..
-         " (round " .. round_count .. ", dmg " .. format_number(damage_total) .. ")")
+      detail("In combat:         ", fight_start.enemy ..
+         " (round " .. round_count .. ", dmg " .. format_number(damage_total) .. ")",
+         PALETTE.failed)
    end
 end
 
@@ -3150,16 +3206,30 @@ local function render_pup_area_table(kill_where, avg_trains, xp_per_level)
       return
    end
 
-   local fmt = "  %-16s  %5s  %5s  %7s  %7s  %6s"
-   ColourNote("cyan", "", string.format(fmt,
-      "Area", "Kills", "AvgXP", "AvgTime", "Est/Pup", "Trn/Hr"))
-   ColourNote("cyan", "", string.format(fmt,
-      "----------------", "-----", "-----", "-------", "-------", "------"))
+   local hdr = string.format("  %-16s  %5s  %5s  %7s  %7s  %6s",
+      "Area", "Kills", "AvgXP", "AvgTime", "Est/Pup", "Trn/Hr")
+   local sep = string.format("  %-16s  %5s  %5s  %7s  %7s  %6s",
+      "----------------", "-----", "-----", "-------", "-------", "------")
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
+   -- Determine which area has the best Trn/Hr (we'll color it as completed)
+   local best_trn_hr = 0
    for _, a in ipairs(areas) do
+      if a.avg_xp and a.avg_xp > 0 and a.avg_time and a.avg_time > 0 and avg_trains then
+         local est_time_per_pup = (xp_per_level / a.avg_xp) * a.avg_time
+         if est_time_per_pup > 0 then
+            local thr = math.floor(avg_trains / est_time_per_pup * 3600)
+            if thr > best_trn_hr then best_trn_hr = thr end
+         end
+      end
+   end
+
+   for i, a in ipairs(areas) do
       local avg_time_str = "N/A"
       local est_pup_str = "N/A"
       local trn_hr_str = "N/A"
+      local trn_hr_val = nil
 
       if a.avg_time and a.avg_time > 0 then
          avg_time_str = format_time(a.avg_time)
@@ -3169,20 +3239,33 @@ local function render_pup_area_table(kill_where, avg_trains, xp_per_level)
          local est_time_per_pup = (xp_per_level / a.avg_xp) * a.avg_time
          est_pup_str = format_time(est_time_per_pup)
          if avg_trains and est_time_per_pup > 0 then
-            trn_hr_str = tostring(math.floor(avg_trains / est_time_per_pup * 3600))
+            trn_hr_val = math.floor(avg_trains / est_time_per_pup * 3600)
+            trn_hr_str = tostring(trn_hr_val)
          end
       end
 
       local zone_display = a.zone
       if #zone_display > 16 then zone_display = string.sub(zone_display, 1, 15) .. "+" end
 
-      ColourNote("white", "", string.format(fmt,
-         zone_display,
-         format_abbreviated(a.kills),
-         format_abbreviated(math.floor(a.avg_xp)),
-         avg_time_str,
-         est_pup_str,
-         trn_hr_str))
+      local trn_hr_fg = (trn_hr_val and trn_hr_val == best_trn_hr and best_trn_hr > 0)
+         and PALETTE.completed or PALETTE.number_fg
+      local bg = row_bg(i)
+
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-16s", zone_display), fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", format_abbreviated(a.kills)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", format_abbreviated(math.floor(a.avg_xp))),
+            fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%7s", avg_time_str), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%7s", est_pup_str), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%6s", trn_hr_str), fg = trn_hr_fg},
+      }, bg)
    end
 end
 
@@ -3221,7 +3304,7 @@ local function render_pup_section(pup_where_clause, kill_where)
 
    if pup_count > 0 then
       local avg_t_str = avg_trains and string.format("%.1f", avg_trains) or "N/A"
-      ColourNote("white", "", string.format(
+      ColourNote(PALETTE.summary_fg, "", string.format(
          "  Powerups: %d     Trains: %d (%s/pup)",
          pup_count, total_trains, avg_t_str))
 
@@ -3233,7 +3316,7 @@ local function render_pup_section(pup_where_clause, kill_where)
          total_combat_time = row.t
       end
       local avg_time_per_pup = pup_count > 0 and total_combat_time / pup_count or 0
-      ColourNote("white", "", string.format(
+      ColourNote(PALETTE.summary_fg, "", string.format(
          "  Combat time: %s (%s/pup)",
          format_time(total_combat_time),
          format_time(avg_time_per_pup)))
@@ -3263,19 +3346,35 @@ local function render_pup_list(pup_where_clause, limit)
 
    if #pups == 0 then return end
 
-   local fmt = "  %5s  %-16s  %-7s  %5s  %-16s  %6s"
-   ColourNote("cyan", "", string.format(fmt, "ID", "When", "T/R", "Pup#", "Zone", "Trains"))
-   ColourNote("cyan", "", string.format(fmt, "-----", "----------------", "-------", "-----", "----------------", "------"))
+   local hdr = string.format("  %5s  %-16s  %-7s  %5s  %-16s  %6s",
+      "ID", "When", "T/R", "Pup#", "Zone", "Trains")
+   local sep = string.format("  %5s  %-16s  %-7s  %5s  %-16s  %6s",
+      "-----", "----------------", "-------", "-----", "----------------", "------")
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
-   for _, p in ipairs(pups) do
+   for i, p in ipairs(pups) do
       local tr_label = format_tier_label(p.tier, p.redo) .. "R" .. p.remort
       local zone_display = p.zone or "?"
       if #zone_display > 16 then zone_display = string.sub(zone_display, 1, 15) .. "+" end
       local trains_str = p.trains_earned and tostring(p.trains_earned) or "N/A"
       local when_str = os.date("%Y-%m-%d %H:%M", p.timestamp)
-      ColourNote("white", "", string.format(fmt,
-         tostring(p.id), when_str, tr_label, tostring(p.pup_number),
-         zone_display, trains_str))
+      local bg = row_bg(i)
+
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", tostring(p.id)), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-16s", when_str), fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-7s", tr_label), fg = PALETTE.summary_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", tostring(p.pup_number)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-16s", zone_display), fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%6s", trains_str), fg = PALETTE.completed},
+      }, bg)
    end
 end
 
@@ -3383,12 +3482,12 @@ local function show_pup_detail(pup_id)
       local hdr = string.format(
          "  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s  %5s",
          "#", "Mob", "Zone", "XP", "Dmg", "Rnd", "MLvl", "Time")
-      ColourNote("cyan", "", hdr)
+      ColourNote(PALETTE.header_fg, "", hdr)
       local sep = "  " .. string.rep("-", num_w) .. "  " .. string.rep("-", max_mob) .. "  " ..
          string.rep("-", max_zone) .. "  " .. string.rep("-", 7) .. "  " ..
          string.rep("-", 5) .. "  " .. string.rep("-", 3) .. "  " .. string.rep("-", 4) ..
          "  " .. string.rep("-", 5)
-      ColourNote("cyan", "", sep)
+      ColourNote(PALETTE.sep_fg, "", sep)
 
       local total_xp = 0
       local total_damage = 0
@@ -3407,18 +3506,35 @@ local function show_pup_detail(pup_id)
 
          local mlvl_str = k.mob_level and tostring(k.mob_level) or "-"
          local time_str = k.combat_time and format_time(k.combat_time) or "N/A"
-         ColourNote("white", "", string.format(
-            "  %-" .. num_w .. "d  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s  %5s",
-            i, trunc(k.mob_name, max_mob), trunc(k.zone, max_zone),
-            format_number(k.xp_gained), format_number(k.damage_total),
-            k.rounds, mlvl_str, time_str))
+         local bg = row_bg(i)
+
+         emit_row({
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%-" .. num_w .. "d", i), fg = PALETTE.id_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%-" .. max_mob .. "s", trunc(k.mob_name, max_mob)),
+               fg = PALETTE.mob_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%-" .. max_zone .. "s", trunc(k.zone, max_zone)),
+               fg = PALETTE.text_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%7s", format_number(k.xp_gained)), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", format_number(k.damage_total)), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%3d", k.rounds), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%4s", mlvl_str), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", time_str), fg = PALETTE.number_fg},
+         }, bg)
       end
 
-      ColourNote("cyan", "", sep)
+      ColourNote(PALETTE.sep_fg, "", sep)
 
       local footer_label_w = num_w + 2 + max_mob
       local time_total_str = time_count > 0 and format_time(total_time) or "N/A"
-      ColourNote("white", "", string.format(
+      ColourNote(PALETTE.summary_fg, "", string.format(
          "  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s  %5s",
          string.format("Tot %d kills", #kills), "",
          format_number(total_xp), format_number(total_damage),
@@ -3428,7 +3544,7 @@ local function show_pup_detail(pup_id)
       local avg_dmg = math.floor(total_damage / #kills)
       local avg_rnd = string.format("%.1f", total_rounds / #kills)
       local avg_time_str = time_count > 0 and format_time(total_time / time_count) or "N/A"
-      ColourNote("white", "", string.format(
+      ColourNote(PALETTE.summary_fg, "", string.format(
          "  %-" .. footer_label_w .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s  %5s",
          "Avg", "", format_number(avg_xp), format_number(avg_dmg),
          avg_rnd, "", avg_time_str))
@@ -3436,10 +3552,12 @@ local function show_pup_detail(pup_id)
 
    -- Reward summary
    if pup_event.trains_earned then
-      ColourNote("white", "", "  Trains earned: " .. pup_event.trains_earned)
+      ColourNote(PALETTE.completed, "",
+         "  Trains earned: " .. pup_event.trains_earned)
    end
    if pup_event.xp_per_level then
-      ColourNote("white", "", "  XP needed: " .. format_number(pup_event.xp_per_level))
+      ColourNote(PALETTE.summary_fg, "",
+         "  XP needed: " .. format_number(pup_event.xp_per_level))
    end
 end
 
@@ -3484,20 +3602,34 @@ local function show_pup_zone_detail(zone_search)
       return
    end
 
-   local fmt = "  %-24s  %5s  %5s  %7s  %5s"
-   ColourNote("cyan", "", string.format(fmt, "Mob", "Kills", "AvgXP", "AvgTime", "AvgRd"))
-   ColourNote("cyan", "", string.format(fmt, "------------------------", "-----", "-----", "-------", "-----"))
+   local hdr = string.format("  %-24s  %5s  %5s  %7s  %5s",
+      "Mob", "Kills", "AvgXP", "AvgTime", "AvgRd")
+   local sep = string.format("  %-24s  %5s  %5s  %7s  %5s",
+      "------------------------", "-----", "-----", "-------", "-----")
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
-   for _, m in ipairs(mobs) do
+   for i, m in ipairs(mobs) do
       local mob_display = m.mob_name
       if #mob_display > 24 then mob_display = string.sub(mob_display, 1, 23) .. "+" end
       local avg_time_str = m.avg_time and format_time(m.avg_time) or "N/A"
-      ColourNote("white", "", string.format(fmt,
-         mob_display,
-         tostring(m.cnt),
-         format_abbreviated(math.floor(m.avg_xp)),
-         avg_time_str,
-         m.avg_rnd and string.format("%.1f", m.avg_rnd) or "-"))
+      local bg = row_bg(i)
+
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-24s", mob_display), fg = PALETTE.mob_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5d", m.cnt), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", format_abbreviated(math.floor(m.avg_xp))),
+            fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%7s", avg_time_str), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s",
+            m.avg_rnd and string.format("%.1f", m.avg_rnd) or "-"),
+            fg = PALETTE.number_fg},
+      }, bg)
    end
 end
 
@@ -3609,11 +3741,11 @@ function show_level_stats_section(level, tier, remort, redo, label)
    -- Column header
    local hdr = string.format("  %-" .. num_w .. "s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3s  %4s",
       "#", "Mob", "Zone", "XP", "Dmg", "Rnd", "MLvl")
-   ColourNote("cyan", "", hdr)
+   ColourNote(PALETTE.header_fg, "", hdr)
    local sep = "  " .. string.rep("-", num_w) .. "  " .. string.rep("-", max_mob) .. "  " ..
       string.rep("-", max_zone) .. "  " .. string.rep("-", 7) .. "  " ..
       string.rep("-", 5) .. "  " .. string.rep("-", 3) .. "  " .. string.rep("-", 4)
-   ColourNote("cyan", "", sep)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
    -- Data rows
    local total_xp = 0
@@ -3626,15 +3758,32 @@ function show_level_stats_section(level, tier, remort, redo, label)
       total_rounds = total_rounds + k.rounds
 
       local mlvl_str = k.mob_level and tostring(k.mob_level) or "-"
-      local row_str = string.format("  %-" .. num_w .. "d  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %7s  %5s  %3d  %4s",
-         i, trunc(k.mob_name, max_mob), trunc(k.zone, max_zone),
-         format_number(k.xp_gained),
-         format_number(k.damage_total), k.rounds, mlvl_str)
-      ColourNote("white", "", row_str)
+      local bg = row_bg(i)
+
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. num_w .. "d", i), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_mob .. "s", trunc(k.mob_name, max_mob)),
+            fg = PALETTE.mob_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_zone .. "s", trunc(k.zone, max_zone)),
+            fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%7s", format_number(k.xp_gained)),
+            fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", format_number(k.damage_total)),
+            fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%3d", k.rounds), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%4s", mlvl_str), fg = PALETTE.number_fg},
+      }, bg)
    end
 
    -- Footer
-   ColourNote("cyan", "", sep)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
    local footer_label_w = num_w + 2 + max_mob
 
@@ -3642,7 +3791,7 @@ function show_level_stats_section(level, tier, remort, redo, label)
       string.format("Tot %d kills", #kills), "",
       format_number(total_xp),
       format_number(total_damage), total_rounds, "")
-   ColourNote("white", "", tot_str)
+   ColourNote(PALETTE.summary_fg, "", tot_str)
 
    local avg_xp = math.floor(total_xp / #kills)
    local avg_dmg = math.floor(total_damage / #kills)
@@ -3651,10 +3800,10 @@ function show_level_stats_section(level, tier, remort, redo, label)
       "Avg", "",
       format_number(avg_xp),
       format_number(avg_dmg), avg_rnd, "")
-   ColourNote("white", "", avg_str)
+   ColourNote(PALETTE.summary_fg, "", avg_str)
 
    if total_deaths > 0 then
-      ColourNote("red", "", "  Deaths: " .. total_deaths)
+      ColourNote(PALETTE.failed, "", "  Deaths: " .. total_deaths)
    end
 end
 
@@ -3769,9 +3918,9 @@ end
 local function render_bracket_table(rows, show_header, grand_zones)
    local fmt =  "  %-7s  %5s  %5s  %6s  %6s  %6s  %5s  %6s"
    if show_header then
-      ColourNote("cyan", "", string.format(fmt,
+      ColourNote(PALETTE.header_fg, "", string.format(fmt,
          "Bracket", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
-      ColourNote("cyan", "", string.format(fmt,
+      ColourNote(PALETTE.sep_fg, "", string.format(fmt,
          "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
    end
 
@@ -3783,14 +3932,32 @@ local function render_bracket_table(rows, show_header, grand_zones)
    local grand_rnd_sum = 0
    local grand_deaths = 0
 
-   for _, r in ipairs(rows) do
+   for i, r in ipairs(rows) do
       grand_kills = grand_kills + r.kills
       grand_deaths = grand_deaths + r.deaths
+      local bg = row_bg(i)
+      local death_str = r.deaths > 0 and tostring(r.deaths) or "-"
+      local death_fg = r.deaths > 0 and PALETTE.failed or PALETTE.number_fg
 
       if r.kills == 0 then
-         ColourNote("white", "", string.format(fmt,
-            r.label, "-", "-", "-", "-", "-", "-",
-            r.deaths > 0 and tostring(r.deaths) or "-"))
+         emit_row({
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%-7s", r.label), fg = PALETTE.id_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", "-"), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", "-"), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", "-"), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", death_str), fg = death_fg},
+         }, bg)
       else
          grand_xp_sum = grand_xp_sum + (r.avg_xp * r.kills)
          grand_dmg_sum = grand_dmg_sum + (r.avg_dmg * r.kills)
@@ -3805,20 +3972,32 @@ local function render_bracket_table(rows, show_header, grand_zones)
             gap_str = string.format("%+.1f", r.avg_gap)
          end
 
-         ColourNote("white", "", string.format(fmt,
-            r.label,
-            format_abbreviated(r.kills),
-            format_abbreviated(math.floor(r.avg_xp)),
-            format_abbreviated(math.floor(r.avg_dmg)),
-            gap_str,
-            string.format("%.1f", r.avg_rnd),
-            r.zones,
-            r.deaths > 0 and tostring(r.deaths) or "-"))
+         emit_row({
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%-7s", r.label), fg = PALETTE.id_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", format_abbreviated(r.kills)), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", format_abbreviated(math.floor(r.avg_xp))),
+               fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", format_abbreviated(math.floor(r.avg_dmg))),
+               fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", gap_str), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", string.format("%.1f", r.avg_rnd)),
+               fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%5s", r.zones), fg = PALETTE.number_fg},
+            {text = "  ", fg = PALETTE.text_fg},
+            {text = string.format("%6s", death_str), fg = death_fg},
+         }, bg)
       end
    end
 
-   -- Total row
-   ColourNote("cyan", "", string.format(fmt,
+   -- Total row separator
+   ColourNote(PALETTE.sep_fg, "", string.format(fmt,
       "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
 
    local tot_avg_xp = grand_kills > 0 and format_abbreviated(math.floor(grand_xp_sum / grand_kills)) or "-"
@@ -3827,15 +4006,27 @@ local function render_bracket_table(rows, show_header, grand_zones)
    local tot_avg_rnd = grand_kills > 0 and string.format("%.1f", grand_rnd_sum / grand_kills) or "-"
 
    local zones_str = grand_zones and tostring(grand_zones) or ""
-   ColourNote("white", "", string.format(fmt,
-      "Total",
-      format_abbreviated(grand_kills),
-      tot_avg_xp,
-      tot_avg_dmg,
-      tot_avg_gap,
-      tot_avg_rnd,
-      zones_str,
-      grand_deaths > 0 and tostring(grand_deaths) or "-"))
+   local tot_death_fg = grand_deaths > 0 and PALETTE.failed or PALETTE.summary_fg
+
+   emit_row({
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%-7s", "Total"), fg = PALETTE.summary_fg},
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%5s", format_abbreviated(grand_kills)), fg = PALETTE.summary_fg},
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%5s", tot_avg_xp), fg = PALETTE.summary_fg},
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%6s", tot_avg_dmg), fg = PALETTE.summary_fg},
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%6s", tot_avg_gap), fg = PALETTE.summary_fg},
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%6s", tot_avg_rnd), fg = PALETTE.summary_fg},
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%5s", zones_str), fg = PALETTE.summary_fg},
+      {text = "  ", fg = PALETTE.text_fg},
+      {text = string.format("%6s", grand_deaths > 0 and tostring(grand_deaths) or "-"),
+         fg = tot_death_fg},
+   }, "")
 end
 
 -- =============================================================================
@@ -3971,35 +4162,67 @@ function ldb_tier(name, line, wildcards)
          table.insert(bracket_rows, row_data)
       end
 
-      ColourNote("cyan", "", "  -- " .. br.label .. " --")
+      ColourNote(PALETTE.header_fg, "", "  -- " .. br.label .. " --")
       if not bracket_has_data then
          ColourNote("yellow", "", "    No data.")
       else
-         ColourNote("cyan", "", string.format(tier_fmt,
+         ColourNote(PALETTE.header_fg, "", string.format(tier_fmt,
             "Remort", "Kills", "AvgXP", "AvgDmg", "AvgGap", "AvgRnd", "Zones", "Deaths"))
-         ColourNote("cyan", "", string.format(tier_fmt,
+         ColourNote(PALETTE.sep_fg, "", string.format(tier_fmt,
             "-------", "-----", "-----", "------", "------", "------", "-----", "------"))
 
-         for _, r in ipairs(bracket_rows) do
+         for ri, r in ipairs(bracket_rows) do
+            local bg = row_bg(ri)
+            local death_str = r.deaths > 0 and tostring(r.deaths) or "-"
+            local death_fg = r.deaths > 0 and PALETTE.failed or PALETTE.number_fg
+
             if r.kills == 0 then
-               ColourNote("white", "", string.format(tier_fmt,
-                  r.label, "-", "-", "-", "-", "-", "-",
-                  r.deaths > 0 and tostring(r.deaths) or "-"))
+               emit_row({
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%-7s", r.label), fg = PALETTE.id_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%5s", "-"), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%5s", "-"), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%5s", "-"), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", death_str), fg = death_fg},
+               }, bg)
             else
                local gap_str = "-"
                if r.avg_gap then
                   gap_str = string.format("%+.1f", r.avg_gap)
                end
 
-               ColourNote("white", "", string.format(tier_fmt,
-                  r.label,
-                  format_abbreviated(r.kills),
-                  format_abbreviated(math.floor(r.avg_xp)),
-                  format_abbreviated(math.floor(r.avg_dmg)),
-                  gap_str,
-                  string.format("%.1f", r.avg_rnd),
-                  r.zones,
-                  r.deaths > 0 and tostring(r.deaths) or "-"))
+               emit_row({
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%-7s", r.label), fg = PALETTE.id_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%5s", format_abbreviated(r.kills)),
+                     fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%5s", format_abbreviated(math.floor(r.avg_xp))),
+                     fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", format_abbreviated(math.floor(r.avg_dmg))),
+                     fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", gap_str), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", string.format("%.1f", r.avg_rnd)),
+                     fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%5s", r.zones), fg = PALETTE.number_fg},
+                  {text = "  ", fg = PALETTE.text_fg},
+                  {text = string.format("%6s", death_str), fg = death_fg},
+               }, bg)
             end
          end
       end
@@ -4043,24 +4266,56 @@ function ldb_tier(name, line, wildcards)
 
    if pup_has_data then
       Note("")
-      ColourNote("cyan", "", "  -- Powerups --")
-      ColourNote("cyan", "", string.format(pup_fmt,
+      ColourNote(PALETTE.header_fg, "", "  -- Powerups --")
+      ColourNote(PALETTE.header_fg, "", string.format(pup_fmt,
          "Remort", "Pups", "Trains", "Trn/Pup", "AvgTime", "Trn/Hr"))
-      ColourNote("cyan", "", string.format(pup_fmt,
+      ColourNote(PALETTE.sep_fg, "", string.format(pup_fmt,
          "------", "----", "------", "-------", "-------", "------"))
 
+      -- Find best Trn/Hr to highlight
+      local best_trn_hr = 0
       for _, r in ipairs(pup_rows) do
+         if r.trn_hr and r.trn_hr > best_trn_hr then best_trn_hr = r.trn_hr end
+      end
+
+      for ri, r in ipairs(pup_rows) do
+         local bg = row_bg(ri)
          if r.pups == 0 then
-            ColourNote("white", "", string.format(pup_fmt,
-               r.label, "-", "-", "-", "-", "-"))
+            emit_row({
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%-7s", r.label), fg = PALETTE.id_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%4s", "-"), fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%7s", "-"), fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%7s", "-"), fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%6s", "-"), fg = PALETTE.number_fg},
+            }, bg)
          else
-            ColourNote("white", "", string.format(pup_fmt,
-               r.label,
-               tostring(r.pups),
-               tostring(r.trains),
-               r.trn_pup and string.format("%.1f", r.trn_pup) or "N/A",
-               format_time(r.avg_time),
-               r.trn_hr and tostring(r.trn_hr) or "N/A"))
+            local trn_hr_fg = (r.trn_hr and r.trn_hr == best_trn_hr and best_trn_hr > 0)
+               and PALETTE.completed or PALETTE.number_fg
+            emit_row({
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%-7s", r.label), fg = PALETTE.id_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%4s", tostring(r.pups)), fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%6s", tostring(r.trains)), fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%7s",
+                  r.trn_pup and string.format("%.1f", r.trn_pup) or "N/A"),
+                  fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%7s", format_time(r.avg_time)),
+                  fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%6s",
+                  r.trn_hr and tostring(r.trn_hr) or "N/A"), fg = trn_hr_fg},
+            }, bg)
          end
       end
    end
@@ -4148,19 +4403,27 @@ function ldb_quests(name, line, wildcards)
       if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
    end
 
-   -- Column header (# = database ID)
+   -- Column widths (header & data formatted via per-column %-Xs / %Xs)
    local max_id = 2
    for _, q in ipairs(quests) do
       local id_len = #tostring(q.id)
       if id_len > max_id then max_id = id_len end
    end
-   local fmt = "  %-" .. max_id .. "s  %3s  %4s  %5s  %3s  %5s  %-" .. max_mob .. "s"
-   ColourNote("cyan", "", string.format(fmt,
-      "#", "Lvl", "QP", "Gold", "TP", "Time", "Mob (Area)"))
-   local sep = string.format(fmt,
-      string.rep("-", max_id), "---", "----", "-----", "---", "-----",
-      string.rep("-", max_mob))
-   ColourNote("cyan", "", sep)
+   local id_w, lvl_w, qp_w, gold_w, tp_w, time_w = max_id, 3, 6, 7, 3, 5
+
+   local hdr_text = string.format(
+      "  %-" .. id_w .. "s  %" .. lvl_w .. "s  %" .. qp_w .. "s  %" .. gold_w ..
+      "s  %" .. tp_w .. "s  %" .. time_w .. "s  %-" .. max_mob .. "s  %s",
+      "#", "Lvl", "QP", "Gold", "TP", "Time", "Mob (Area)", "Result")
+   local sep = string.format(
+      "  %-" .. id_w .. "s  %" .. lvl_w .. "s  %" .. qp_w .. "s  %" .. gold_w ..
+      "s  %" .. tp_w .. "s  %" .. time_w .. "s  %-" .. max_mob .. "s  %s",
+      string.rep("-", id_w), string.rep("-", lvl_w), string.rep("-", qp_w),
+      string.rep("-", gold_w), string.rep("-", tp_w), string.rep("-", time_w),
+      string.rep("-", max_mob), "------")
+
+   ColourNote(PALETTE.header_fg, "", hdr_text)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
    -- Data rows
    local comp_count = 0
@@ -4171,9 +4434,19 @@ function ldb_quests(name, line, wildcards)
    local sum_gold = 0
    local sum_duration = 0
 
+   -- Per-result color
+   local function result_color(result, is_active)
+      if is_active then return PALETTE.active end
+      if result == "completed" then return PALETTE.completed end
+      if result == "failed" then return PALETTE.failed end
+      if result == "timeout" then return PALETTE.timeout end
+      if result == "unknown" then return PALETTE.unknown end
+      return PALETTE.text_fg
+   end
+
    for i, q in ipairs(quests) do
       local is_active = (q.id == active_quest_id and (q.result == nil or q.result == ""))
-      local is_failed = (q.result == "failed" or q.result == "timeout")
+      local is_completed = (q.result == "completed")
 
       if q.result == "completed" then
          comp_count = comp_count + 1
@@ -4189,27 +4462,40 @@ function ldb_quests(name, line, wildcards)
       end
 
       local mob_area = (q.mob_name or "?") .. " (" .. (q.area or "?") .. ")"
+      local rcolor = result_color(q.result, is_active)
+      local label_str = is_active and "active" or (q.result or "?")
+      local bg = row_bg(i)
 
-      local row_text = string.format(fmt,
-         q.id,
-         q.level,
-         q.qp and format_number(q.qp) or "-",
-         q.gold and format_number(q.gold) or "-",
-         q.tp and tostring(q.tp) or "-",
-         format_duration(q.duration),
-         trunc(mob_area, max_mob))
+      -- Numeric cells dim when uncompleted (data is meaningful only on success)
+      local num_fg = is_completed and PALETTE.number_fg or "#707070"
 
-      if is_active then
-         ColourNote("white", "", row_text, "green", "", " (active)")
-      elseif is_failed then
-         ColourNote("white", "", row_text, "red", "", " (" .. q.result .. ")")
-      else
-         ColourNote("white", "", row_text)
-      end
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. id_w .. "s", q.id), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. lvl_w .. "s", q.level), fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. qp_w .. "s",
+            q.qp and format_number(q.qp) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. gold_w .. "s",
+            q.gold and format_number(q.gold) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. tp_w .. "s",
+            q.tp and tostring(q.tp) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. time_w .. "s", format_duration(q.duration)),
+            fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_mob .. "s", trunc(mob_area, max_mob)),
+            fg = PALETTE.mob_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = label_str, fg = rcolor},
+      }, bg)
    end
 
    -- Summary
-   ColourNote("cyan", "", sep)
+   ColourNote(PALETTE.sep_fg, "", sep)
    local parts = {}
    if comp_count > 0 then table.insert(parts, comp_count .. " completed") end
    if fail_count > 0 then table.insert(parts, fail_count .. " failed") end
@@ -4221,12 +4507,13 @@ function ldb_quests(name, line, wildcards)
    else
       summary_line = summary_line .. string.format(" (of %d total)", #quests)
    end
-   ColourNote("white", "", summary_line)
+   ColourNote(PALETTE.summary_fg, "", summary_line)
 
    if comp_count > 0 then
       local avg_qp = math.floor(sum_qp / comp_count)
       local avg_dur = math.floor(sum_duration / comp_count)
-      ColourNote("white", "", string.format("  Avg QP: %s | Avg time: %s | Total QP: %s | Total gold: %s",
+      ColourNote(PALETTE.summary_fg, "", string.format(
+         "  Avg QP: %s | Avg time: %s | Total QP: %s | Total gold: %s",
          format_number(avg_qp), format_duration(avg_dur),
          format_number(sum_qp), format_number(sum_gold)))
    end
@@ -4290,18 +4577,27 @@ function ldb_campaigns(name, line, wildcards)
       return
    end
 
-   -- Column header (# = database ID)
+   -- Column widths
    local max_id = 2
    for _, c in ipairs(campaigns) do
       local id_len = #tostring(c.id)
       if id_len > max_id then max_id = id_len end
    end
-   local fmt = "  %-" .. max_id .. "s  %3s  %4s  %4s  %5s  %3s  %5s"
-   ColourNote("cyan", "", string.format(fmt,
-      "#", "Lvl", "Mobs", "QP", "Gold", "TP", "Time"))
-   local sep = string.format(fmt,
-      string.rep("-", max_id), "---", "----", "----", "-----", "---", "-----")
-   ColourNote("cyan", "", sep)
+   local id_w, lvl_w, mob_w, qp_w, gold_w, tp_w, time_w = max_id, 3, 4, 6, 7, 3, 5
+
+   local hdr_text = string.format(
+      "  %-" .. id_w .. "s  %" .. lvl_w .. "s  %" .. mob_w .. "s  %" .. qp_w ..
+      "s  %" .. gold_w .. "s  %" .. tp_w .. "s  %" .. time_w .. "s  %s",
+      "#", "Lvl", "Mobs", "QP", "Gold", "TP", "Time", "Result")
+   local sep = string.format(
+      "  %-" .. id_w .. "s  %" .. lvl_w .. "s  %" .. mob_w .. "s  %" .. qp_w ..
+      "s  %" .. gold_w .. "s  %" .. tp_w .. "s  %" .. time_w .. "s  %s",
+      string.rep("-", id_w), string.rep("-", lvl_w), string.rep("-", mob_w),
+      string.rep("-", qp_w), string.rep("-", gold_w), string.rep("-", tp_w),
+      string.rep("-", time_w), "------")
+
+   ColourNote(PALETTE.header_fg, "", hdr_text)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
    -- Data rows
    local comp_count = 0
@@ -4311,9 +4607,17 @@ function ldb_campaigns(name, line, wildcards)
    local sum_gold = 0
    local sum_duration = 0
 
+   local function result_color(result, is_active)
+      if is_active then return PALETTE.active end
+      if result == "completed" then return PALETTE.completed end
+      if result == "quit" then return PALETTE.failed end
+      if result == "unknown" then return PALETTE.unknown end
+      return PALETTE.text_fg
+   end
+
    for i, c in ipairs(campaigns) do
       local is_active = (c.id == active_campaign_id and (c.result == nil or c.result == ""))
-      local is_quit = (c.result == "quit")
+      local is_completed = (c.result == "completed")
 
       if c.result == "completed" then
          comp_count = comp_count + 1
@@ -4326,26 +4630,38 @@ function ldb_campaigns(name, line, wildcards)
          unknown_count = unknown_count + 1
       end
 
-      local row_text = string.format(fmt,
-         c.id,
-         c.level,
-         c.mob_count and tostring(c.mob_count) or "-",
-         c.qp and format_number(c.qp) or "-",
-         c.gold and format_number(c.gold) or "-",
-         c.tp and tostring(c.tp) or "-",
-         format_duration(c.duration))
+      local rcolor = result_color(c.result, is_active)
+      local label_str = is_active and "active" or (c.result or "?")
+      local bg = row_bg(i)
+      local num_fg = is_completed and PALETTE.number_fg or "#707070"
 
-      if is_active then
-         ColourNote("white", "", row_text, "green", "", " (active)")
-      elseif is_quit then
-         ColourNote("white", "", row_text, "red", "", " (quit)")
-      else
-         ColourNote("white", "", row_text)
-      end
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. id_w .. "s", c.id), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. lvl_w .. "s", c.level), fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. mob_w .. "s",
+            c.mob_count and tostring(c.mob_count) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. qp_w .. "s",
+            c.qp and format_number(c.qp) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. gold_w .. "s",
+            c.gold and format_number(c.gold) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. tp_w .. "s",
+            c.tp and tostring(c.tp) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. time_w .. "s", format_duration(c.duration)),
+            fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = label_str, fg = rcolor},
+      }, bg)
    end
 
    -- Summary
-   ColourNote("cyan", "", sep)
+   ColourNote(PALETTE.sep_fg, "", sep)
    local parts = {}
    if comp_count > 0 then table.insert(parts, comp_count .. " completed") end
    if quit_count > 0 then table.insert(parts, quit_count .. " quit") end
@@ -4356,12 +4672,13 @@ function ldb_campaigns(name, line, wildcards)
    else
       summary_line = summary_line .. string.format(" (of %d total)", #campaigns)
    end
-   ColourNote("white", "", summary_line)
+   ColourNote(PALETTE.summary_fg, "", summary_line)
 
    if comp_count > 0 then
       local avg_qp = math.floor(sum_qp / comp_count)
       local avg_dur = math.floor(sum_duration / comp_count)
-      ColourNote("white", "", string.format("  Avg QP: %s | Avg time: %s | Total QP: %s | Total gold: %s",
+      ColourNote(PALETTE.summary_fg, "", string.format(
+         "  Avg QP: %s | Avg time: %s | Total QP: %s | Total gold: %s",
          format_number(avg_qp), format_duration(avg_dur),
          format_number(sum_qp), format_number(sum_gold)))
    end
@@ -4396,36 +4713,43 @@ function ldb_campaign_show(name, line, wildcards)
    -- Header
    ColourNote("cyan", "", PREFIX .. "Campaign #" .. cp_id .. ":")
 
-   -- Started
-   ColourNote("white", "", "  Started:  " .. os.date("%Y-%m-%d %H:%M", campaign.timestamp))
+   local function detail(label, value, value_fg)
+      ColourTell(PALETTE.summary_fg, "", "  " .. label)
+      ColourTell(value_fg or PALETTE.text_fg, "", value)
+      Note("")
+   end
+
+   detail("Started:  ", os.date("%Y-%m-%d %H:%M", campaign.timestamp), PALETTE.id_fg)
 
    -- Level + tier/remort
    local level_str = tostring(campaign.level)
    if campaign.tier and campaign.remort then
       level_str = level_str .. " (" .. format_tier_label(campaign.tier, campaign.redo) .. " R" .. campaign.remort .. ")"
    end
-   ColourNote("white", "", "  Level:    " .. level_str)
+   detail("Level:    ", level_str)
 
    -- Result + duration
    local is_active = (campaign.id == active_campaign_id and (campaign.result == nil or campaign.result == ""))
    local result = campaign.result or "active"
    local dur_str = campaign.duration and (" (" .. format_duration(campaign.duration) .. ")") or ""
 
+   local result_fg, result_text
    if is_active or result == "active" then
-      ColourNote("white", "", "  Result:   ", "green", "", "active")
-   elseif result == "quit" then
-      ColourNote("white", "", "  Result:   ", "red", "", "quit" .. dur_str)
-   elseif result == "unknown" then
-      ColourNote("white", "", "  Result:   ", "red", "", "unknown" .. dur_str)
+      result_fg, result_text = PALETTE.active, "active"
    elseif result == "completed" then
-      ColourNote("white", "", "  Result:   completed" .. dur_str)
+      result_fg, result_text = PALETTE.completed, "completed" .. dur_str
+   elseif result == "quit" then
+      result_fg, result_text = PALETTE.failed, "quit" .. dur_str
+   elseif result == "unknown" then
+      result_fg, result_text = PALETTE.unknown, "unknown" .. dur_str
    else
-      ColourNote("white", "", "  Result:   " .. result .. dur_str)
+      result_fg, result_text = PALETTE.text_fg, result .. dur_str
    end
+   detail("Result:   ", result_text, result_fg)
 
    -- Mobs
    if campaign.mob_count then
-      ColourNote("white", "", "  Mobs:     " .. campaign.mob_count)
+      detail("Mobs:     ", tostring(campaign.mob_count), PALETTE.number_fg)
    end
 
    -- Rewards
@@ -4437,15 +4761,14 @@ function ldb_campaign_show(name, line, wildcards)
       if campaign.trains then table.insert(reward_parts, campaign.trains .. " trains") end
       if campaign.pracs then table.insert(reward_parts, campaign.pracs .. " pracs") end
       if #reward_parts > 0 then
-         ColourNote("white", "", "  Rewards:  " .. table.concat(reward_parts, ", "))
+         detail("Rewards:  ", table.concat(reward_parts, ", "), PALETTE.completed)
       end
    elseif is_active or result == "active" then
-      -- Show expected rewards for active campaigns
       local exp_parts = {}
       if campaign.expected_qp then table.insert(exp_parts, format_number(campaign.expected_qp) .. " QP") end
       if campaign.expected_gold then table.insert(exp_parts, format_number(campaign.expected_gold) .. " gold") end
       if #exp_parts > 0 then
-         ColourNote("white", "", "  Expected: " .. table.concat(exp_parts, ", "))
+         detail("Expected: ", table.concat(exp_parts, ", "), PALETTE.summary_fg)
       end
    end
 
@@ -4458,11 +4781,26 @@ function ldb_campaign_show(name, line, wildcards)
 
    if #mobs > 0 then
       Note("")
-      ColourNote("cyan", "", "  Mob list (" .. #mobs .. "):")
+      ColourNote(PALETTE.header_fg, "", "  Mob list (" .. #mobs .. "):")
       local num_w = #tostring(#mobs)
+      local max_mob = 3
+      for _, mob in ipairs(mobs) do
+         if #mob.mob_name > max_mob then max_mob = #mob.mob_name end
+      end
+      if max_mob > 32 then max_mob = 32 end
+
       for i, mob in ipairs(mobs) do
-         ColourNote("white", "", string.format("    %" .. num_w .. "d. %s (%s)",
-            i, mob.mob_name, mob.area or "?"))
+         local bg = row_bg(i)
+         emit_row({
+            {text = "    ", fg = PALETTE.text_fg},
+            {text = string.format("%" .. num_w .. "d", i), fg = PALETTE.id_fg},
+            {text = ". ", fg = PALETTE.text_fg},
+            {text = string.format("%-" .. max_mob .. "s", mob.mob_name),
+               fg = PALETTE.mob_fg},
+            {text = "  (", fg = PALETTE.text_fg},
+            {text = mob.area or "?", fg = PALETTE.text_fg},
+            {text = ")", fg = PALETTE.text_fg},
+         }, bg)
       end
    end
 end
@@ -4525,18 +4863,27 @@ function ldb_gquests(name, line, wildcards)
       return
    end
 
-   -- Column header (# = database ID)
+   -- Column widths
    local max_id = 2
    for _, g in ipairs(gquests) do
       local id_len = #tostring(g.id)
       if id_len > max_id then max_id = id_len end
    end
-   local fmt = "  %-" .. max_id .. "s  %3s  %4s  %4s  %5s  %3s  %5s"
-   ColourNote("cyan", "", string.format(fmt,
-      "#", "Lvl", "Mobs", "QP", "Gold", "TP", "Time"))
-   local sep = string.format(fmt,
-      string.rep("-", max_id), "---", "----", "----", "-----", "---", "-----")
-   ColourNote("cyan", "", sep)
+   local id_w, lvl_w, mob_w, qp_w, gold_w, tp_w, time_w = max_id, 3, 4, 6, 7, 3, 5
+
+   local hdr_text = string.format(
+      "  %-" .. id_w .. "s  %" .. lvl_w .. "s  %" .. mob_w .. "s  %" .. qp_w ..
+      "s  %" .. gold_w .. "s  %" .. tp_w .. "s  %" .. time_w .. "s  %s",
+      "#", "Lvl", "Mobs", "QP", "Gold", "TP", "Time", "Result")
+   local sep = string.format(
+      "  %-" .. id_w .. "s  %" .. lvl_w .. "s  %" .. mob_w .. "s  %" .. qp_w ..
+      "s  %" .. gold_w .. "s  %" .. tp_w .. "s  %" .. time_w .. "s  %s",
+      string.rep("-", id_w), string.rep("-", lvl_w), string.rep("-", mob_w),
+      string.rep("-", qp_w), string.rep("-", gold_w), string.rep("-", tp_w),
+      string.rep("-", time_w), "---------")
+
+   ColourNote(PALETTE.header_fg, "", hdr_text)
+   ColourNote(PALETTE.sep_fg, "", sep)
 
    -- Data rows
    local won_count = 0
@@ -4549,6 +4896,17 @@ function ldb_gquests(name, line, wildcards)
    local sum_gold = 0
    local sum_duration = 0
    local finished_count = 0  -- won + completed (for avg calculations)
+
+   local function result_color(result, is_active)
+      if is_active then return PALETTE.active end
+      if result == "won" then return PALETTE.completed end
+      if result == "completed" then return PALETTE.completed end
+      if result == "expired" then return PALETTE.failed end
+      if result == "cancelled" then return PALETTE.failed end
+      if result == "quit" then return PALETTE.failed end
+      if result == "unknown" then return PALETTE.unknown end
+      return PALETTE.text_fg
+   end
 
    for i, g in ipairs(gquests) do
       local is_active = (g.id == active_gquest_id and (g.result == nil or g.result == ""))
@@ -4578,32 +4936,39 @@ function ldb_gquests(name, line, wildcards)
          unknown_count = unknown_count + 1
       end
 
-      local row_text = string.format(fmt,
-         g.id,
-         g.level,
-         g.mob_count and tostring(g.mob_count) or "-",
-         g.qp and format_number(g.qp) or "-",
-         g.gold and format_number(g.gold) or "-",
-         g.tp and tostring(g.tp) or "-",
-         format_duration(g.duration))
+      local rcolor = result_color(g.result, is_active)
+      local label_str = is_active and "active" or (g.result or "?")
+      local bg = row_bg(i)
+      local is_finished = (g.result == "won" or g.result == "completed")
+      local num_fg = is_finished and PALETTE.number_fg or "#707070"
 
-      if is_active then
-         ColourNote("white", "", row_text, "green", "", " (active)")
-      elseif g.result == "won" then
-         ColourNote("white", "", row_text, "cyan", "", " (won)")
-      elseif g.result == "expired" then
-         ColourNote("white", "", row_text, "red", "", " (expired)")
-      elseif g.result == "cancelled" then
-         ColourNote("white", "", row_text, "red", "", " (cancelled)")
-      elseif g.result == "quit" then
-         ColourNote("white", "", row_text, "red", "", " (quit)")
-      else
-         ColourNote("white", "", row_text)
-      end
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. id_w .. "s", g.id), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. lvl_w .. "s", g.level), fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. mob_w .. "s",
+            g.mob_count and tostring(g.mob_count) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. qp_w .. "s",
+            g.qp and format_number(g.qp) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. gold_w .. "s",
+            g.gold and format_number(g.gold) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. tp_w .. "s",
+            g.tp and tostring(g.tp) or "-"), fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%" .. time_w .. "s", format_duration(g.duration)),
+            fg = num_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = label_str, fg = rcolor},
+      }, bg)
    end
 
    -- Summary
-   ColourNote("cyan", "", sep)
+   ColourNote(PALETTE.sep_fg, "", sep)
    local parts = {}
    if won_count > 0 then table.insert(parts, won_count .. " won") end
    if comp_count > 0 then table.insert(parts, comp_count .. " completed") end
@@ -4617,7 +4982,7 @@ function ldb_gquests(name, line, wildcards)
    else
       summary_line = summary_line .. string.format(" (of %d total)", #gquests)
    end
-   ColourNote("white", "", summary_line)
+   ColourNote(PALETTE.summary_fg, "", summary_line)
 
    if sum_qp > 0 then
       local avg_parts = {}
@@ -4629,7 +4994,7 @@ function ldb_gquests(name, line, wildcards)
       if sum_gold > 0 then
          table.insert(avg_parts, "Total gold: " .. format_number(sum_gold))
       end
-      ColourNote("white", "", "  " .. table.concat(avg_parts, " | "))
+      ColourNote(PALETTE.summary_fg, "", "  " .. table.concat(avg_parts, " | "))
    end
 end
 
@@ -4666,42 +5031,40 @@ function ldb_gquest_show(name, line, wildcards)
    end
    ColourNote("cyan", "", header .. ":")
 
-   -- Started
-   ColourNote("white", "", "  Started:  " .. os.date("%Y-%m-%d %H:%M", gquest.timestamp))
+   local function detail(label, value, value_fg)
+      ColourTell(PALETTE.summary_fg, "", "  " .. label)
+      ColourTell(value_fg or PALETTE.text_fg, "", value)
+      Note("")
+   end
 
-   -- Level + tier/remort
+   detail("Started:  ", os.date("%Y-%m-%d %H:%M", gquest.timestamp), PALETTE.id_fg)
+
    local level_str = tostring(gquest.level)
    if gquest.tier and gquest.remort then
       level_str = level_str .. " (" .. format_tier_label(gquest.tier, gquest.redo) .. " R" .. gquest.remort .. ")"
    end
-   ColourNote("white", "", "  Level:    " .. level_str)
+   detail("Level:    ", level_str)
 
-   -- Result + duration
    local is_active = (gquest.id == active_gquest_id and (gquest.result == nil or gquest.result == ""))
    local result = gquest.result or "active"
    local dur_str = gquest.duration and (" (" .. format_duration(gquest.duration) .. ")") or ""
 
+   local result_fg, result_text
    if is_active or result == "active" then
-      ColourNote("white", "", "  Result:   ", "green", "", "active")
-   elseif result == "won" then
-      ColourNote("white", "", "  Result:   ", "cyan", "", "won" .. dur_str)
-   elseif result == "completed" then
-      ColourNote("white", "", "  Result:   completed" .. dur_str)
-   elseif result == "expired" then
-      ColourNote("white", "", "  Result:   ", "red", "", "expired" .. dur_str)
-   elseif result == "cancelled" then
-      ColourNote("white", "", "  Result:   ", "red", "", "cancelled" .. dur_str)
-   elseif result == "quit" then
-      ColourNote("white", "", "  Result:   ", "red", "", "quit" .. dur_str)
+      result_fg, result_text = PALETTE.active, "active"
+   elseif result == "won" or result == "completed" then
+      result_fg, result_text = PALETTE.completed, result .. dur_str
+   elseif result == "expired" or result == "cancelled" or result == "quit" then
+      result_fg, result_text = PALETTE.failed, result .. dur_str
    elseif result == "unknown" then
-      ColourNote("white", "", "  Result:   ", "red", "", "unknown" .. dur_str)
+      result_fg, result_text = PALETTE.unknown, "unknown" .. dur_str
    else
-      ColourNote("white", "", "  Result:   " .. result .. dur_str)
+      result_fg, result_text = PALETTE.text_fg, result .. dur_str
    end
+   detail("Result:   ", result_text, result_fg)
 
-   -- Mobs
    if gquest.mob_count then
-      ColourNote("white", "", "  Mobs:     " .. gquest.mob_count)
+      detail("Mobs:     ", tostring(gquest.mob_count), PALETTE.number_fg)
    end
 
    -- Rewards
@@ -4713,23 +5076,21 @@ function ldb_gquest_show(name, line, wildcards)
       if gquest.trains then table.insert(reward_parts, gquest.trains .. " trains") end
       if gquest.pracs then table.insert(reward_parts, gquest.pracs .. " pracs") end
       if #reward_parts > 0 then
-         ColourNote("white", "", "  Rewards:  " .. table.concat(reward_parts, ", "))
+         detail("Rewards:  ", table.concat(reward_parts, ", "), PALETTE.completed)
       end
    elseif is_active or result == "active" then
-      -- Show expected rewards and per-mob QP accumulated so far
       local exp_parts = {}
       if gquest.expected_qp then table.insert(exp_parts, format_number(gquest.expected_qp) .. " QP (base)") end
       if gquest.expected_gold then table.insert(exp_parts, format_number(gquest.expected_gold) .. " gold") end
       if #exp_parts > 0 then
-         ColourNote("white", "", "  Expected: " .. table.concat(exp_parts, ", "))
+         detail("Expected: ", table.concat(exp_parts, ", "), PALETTE.summary_fg)
       end
       if gquest.qp and gquest.qp > 0 then
-         ColourNote("white", "", "  Mob QP:   " .. format_number(gquest.qp) .. " (so far)")
+         detail("Mob QP:   ", format_number(gquest.qp) .. " (so far)", PALETTE.number_fg)
       end
    elseif result == "expired" or result == "cancelled" or result == "quit" then
-      -- Show per-mob QP earned even though gquest wasn't completed
       if gquest.qp and gquest.qp > 0 then
-         ColourNote("white", "", "  Mob QP:   " .. format_number(gquest.qp))
+         detail("Mob QP:   ", format_number(gquest.qp), PALETTE.number_fg)
       end
    end
 
@@ -4742,15 +5103,34 @@ function ldb_gquest_show(name, line, wildcards)
 
    if #mobs > 0 then
       Note("")
-      ColourNote("cyan", "", "  Mob list (" .. #mobs .. "):")
+      ColourNote(PALETTE.header_fg, "", "  Mob list (" .. #mobs .. "):")
       local num_w = #tostring(#mobs)
+      local max_mob = 3
+      for _, mob in ipairs(mobs) do
+         local mob_str = mob.mob_name
+         if mob.mob_count and mob.mob_count > 1 then
+            mob_str = mob.mob_count .. " * " .. mob_str
+         end
+         if #mob_str > max_mob then max_mob = #mob_str end
+      end
+      if max_mob > 32 then max_mob = 32 end
+
       for i, mob in ipairs(mobs) do
          local mob_str = mob.mob_name
          if mob.mob_count and mob.mob_count > 1 then
             mob_str = mob.mob_count .. " * " .. mob_str
          end
-         ColourNote("white", "", string.format("    %" .. num_w .. "d. %s (%s)",
-            i, mob_str, mob.area or "?"))
+         local bg = row_bg(i)
+         emit_row({
+            {text = "    ", fg = PALETTE.text_fg},
+            {text = string.format("%" .. num_w .. "d", i), fg = PALETTE.id_fg},
+            {text = ". ", fg = PALETTE.text_fg},
+            {text = string.format("%-" .. max_mob .. "s", mob_str),
+               fg = PALETTE.mob_fg},
+            {text = "  (", fg = PALETTE.text_fg},
+            {text = mob.area or "?", fg = PALETTE.text_fg},
+            {text = ")", fg = PALETTE.text_fg},
+         }, bg)
       end
    end
 end
@@ -4785,27 +5165,29 @@ function show_zone_stats(zone_name)
       return
    end
 
-   for _, zone in ipairs(zones_found) do
+   for zi, zone in ipairs(zones_found) do
+      if zi > 1 then Note("") end
       ColourNote("cyan", "", PREFIX .. "Zone: " .. zone)
 
+      local stats = nil
       for row in db:nrows(string.format(
          "SELECT COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp " ..
          "FROM kills WHERE zone = %s ", fixsql(zone))) do
+         stats = row
+      end
 
-         if row.cnt > 0 then
-            ColourNote("white", "", string.format("  Kills: %s | XP: %s",
-               format_number(row.cnt), format_number(row.xp)))
-
-            local avg_xp = math.floor(row.xp / row.cnt)
-            ColourNote("white", "", string.format("  Avg XP/kill: %s", format_number(avg_xp)))
-         end
+      if stats and stats.cnt > 0 then
+         local avg_xp = math.floor(stats.xp / stats.cnt)
+         ColourNote(PALETTE.summary_fg, "", string.format(
+            "  Kills: %s  |  XP: %s  |  Avg XP/kill: %s",
+            format_number(stats.cnt), format_number(stats.xp), format_number(avg_xp)))
       end
 
       -- Deaths in this zone
       for row in db:nrows(string.format(
          "SELECT COUNT(*) as cnt FROM deaths WHERE zone = %s", fixsql(zone))) do
          if row.cnt > 0 then
-            ColourNote("red", "", "  Deaths: " .. row.cnt)
+            ColourNote(PALETTE.failed, "", "  Deaths: " .. row.cnt)
          end
       end
 
@@ -4814,20 +5196,50 @@ function show_zone_stats(zone_name)
          "SELECT MIN(level) as min_lvl, MAX(level) as max_lvl " ..
          "FROM kills WHERE zone = %s ", fixsql(zone))) do
          if row.min_lvl then
-            ColourNote("white", "", string.format("  Level range: %d - %d", row.min_lvl, row.max_lvl))
+            ColourNote(PALETTE.summary_fg, "", string.format(
+               "  Level range: %d - %d", row.min_lvl, row.max_lvl))
          end
       end
 
-      -- Top mobs
-      ColourNote("cyan", "", "  Top mobs:")
-      local count = 0
+      -- Top mobs (table)
+      local mobs = {}
       for row in db:nrows(string.format(
          "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp " ..
          "FROM kills WHERE zone = %s " ..
          "GROUP BY mob_name ORDER BY cnt DESC LIMIT 5", fixsql(zone))) do
-         count = count + 1
-         ColourNote("white", "", string.format("    %d. %s (%d kills, %s XP)",
-            count, row.mob_name, row.cnt, format_number(row.xp)))
+         table.insert(mobs, row)
+      end
+
+      if #mobs > 0 then
+         local rank_w = #tostring(#mobs)
+         local max_mob = 3
+         for _, m in ipairs(mobs) do
+            if #m.mob_name > max_mob then max_mob = #m.mob_name end
+         end
+         if max_mob > 32 then max_mob = 32 end
+         local function trunc(s, w)
+            if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
+         end
+         ColourNote(PALETTE.header_fg, "", string.format(
+            "  Top mobs:  %-" .. rank_w .. "s  %-" .. max_mob .. "s  %5s  %9s",
+            "#", "Mob", "Kills", "XP"))
+         ColourNote(PALETTE.sep_fg, "", "             " ..
+            string.rep("-", rank_w) .. "  " .. string.rep("-", max_mob) ..
+            "  " .. string.rep("-", 5) .. "  " .. string.rep("-", 9))
+         for i, m in ipairs(mobs) do
+            local bg = row_bg(i)
+            emit_row({
+               {text = "             ", fg = PALETTE.text_fg},
+               {text = string.format("%-" .. rank_w .. "d", i), fg = PALETTE.id_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%-" .. max_mob .. "s", trunc(m.mob_name, max_mob)),
+                  fg = PALETTE.mob_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%5d", m.cnt), fg = PALETTE.number_fg},
+               {text = "  ", fg = PALETTE.text_fg},
+               {text = string.format("%9s", format_number(m.xp)), fg = PALETTE.number_fg},
+            }, bg)
+         end
       end
    end
 end
@@ -4842,21 +5254,30 @@ function ldb_mob(name, line, wildcards)
 
    ColourNote("cyan", "", PREFIX .. "Mob search: " .. mob_search)
 
-   local found = false
+   local rows = {}
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp, " ..
       "COALESCE(SUM(damage_total), 0) as dmg, " ..
       "COALESCE(SUM(rounds), 0) as rnd " ..
       "FROM kills WHERE mob_name LIKE %s " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT 10", fixsql(like_pattern))) do
+      table.insert(rows, row)
+   end
 
-      found = true
-      ColourNote("white", "", string.format("  %s: %d kills, %s XP",
-         row.mob_name, row.cnt, format_number(row.xp)))
+   if #rows == 0 then
+      ColourNote("yellow", "", "  No kills found matching '" .. mob_search .. "'.")
+      return
+   end
+
+   for ri, row in ipairs(rows) do
+      if ri > 1 then Note("") end
+      ColourNote(PALETTE.mob_fg, "", "  " .. row.mob_name)
 
       local avg_xp = math.floor(row.xp / row.cnt)
       local avg_rnd = row.cnt > 0 and string.format("%.1f", row.rnd / row.cnt) or "0"
-      ColourNote("white", "", string.format("    Avg XP: %s | Avg rounds: %s",
+      ColourNote(PALETTE.summary_fg, "", string.format(
+         "    Kills: %s  |  XP: %s  |  Avg XP: %s  |  Avg rounds: %s",
+         format_number(row.cnt), format_number(row.xp),
          format_number(avg_xp), avg_rnd))
 
       -- Zones where this mob was killed
@@ -4867,12 +5288,9 @@ function ldb_mob(name, line, wildcards)
          table.insert(zones, zrow.zone)
       end
       if #zones > 0 then
-         ColourNote("white", "", "    Zones: " .. table.concat(zones, ", "))
+         ColourNote(PALETTE.summary_fg, "", "    Zones: " ..
+            table.concat(zones, ", "))
       end
-   end
-
-   if not found then
-      ColourNote("yellow", "", "  No kills found matching '" .. mob_search .. "'.")
    end
 end
 
@@ -4885,18 +5303,50 @@ function ldb_top_mobs(name, line, wildcards)
 
    ColourNote("cyan", "", PREFIX .. "Top " .. limit .. " mobs by kill count:")
 
-   local count = 0
+   local rows = {}
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp " ..
       "FROM kills " ..
       "GROUP BY mob_name ORDER BY cnt DESC LIMIT %d", limit)) do
-      count = count + 1
-      ColourNote("white", "", string.format("  %d. %s (%d kills, %s XP)",
-         count, row.mob_name, row.cnt, format_number(row.xp)))
+      table.insert(rows, row)
    end
 
-   if count == 0 then
+   if #rows == 0 then
       ColourNote("yellow", "", "  No kills recorded.")
+      return
+   end
+
+   local rank_w = #tostring(#rows)
+   local max_mob = 3
+   for _, r in ipairs(rows) do
+      if #r.mob_name > max_mob then max_mob = #r.mob_name end
+   end
+   if max_mob > 32 then max_mob = 32 end
+
+   local function trunc(s, w)
+      if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
+   end
+
+   local hdr = string.format("  %-" .. rank_w .. "s  %-" .. max_mob .. "s  %6s  %9s",
+      "#", "Mob", "Kills", "XP")
+   local sep = "  " .. string.rep("-", rank_w) .. "  " .. string.rep("-", max_mob) ..
+      "  " .. string.rep("-", 6) .. "  " .. string.rep("-", 9)
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
+
+   for i, r in ipairs(rows) do
+      local bg = row_bg(i)
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. rank_w .. "d", i), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_mob .. "s", trunc(r.mob_name, max_mob)),
+            fg = PALETTE.mob_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%6s", format_number(r.cnt)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%9s", format_number(r.xp)), fg = PALETTE.number_fg},
+      }, bg)
    end
 end
 
@@ -4909,18 +5359,51 @@ function ldb_top_zones(name, line, wildcards)
 
    ColourNote("cyan", "", PREFIX .. "Top " .. limit .. " zones by total XP:")
 
-   local count = 0
+   local rows = {}
    for row in db:nrows(string.format(
       "SELECT zone, COUNT(*) as cnt, COALESCE(SUM(xp_gained), 0) as xp " ..
       "FROM kills " ..
       "GROUP BY zone ORDER BY xp DESC LIMIT %d", limit)) do
-      count = count + 1
-      ColourNote("white", "", string.format("  %d. %s (%d kills, %s XP)",
-         count, row.zone, row.cnt, format_number(row.xp)))
+      table.insert(rows, row)
    end
 
-   if count == 0 then
+   if #rows == 0 then
       ColourNote("yellow", "", "  No kills recorded.")
+      return
+   end
+
+   local rank_w = #tostring(#rows)
+   local max_zone = 4
+   for _, r in ipairs(rows) do
+      if r.zone and #r.zone > max_zone then max_zone = #r.zone end
+   end
+   if max_zone > 32 then max_zone = 32 end
+
+   local function trunc(s, w)
+      if not s then return "" end
+      if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
+   end
+
+   local hdr = string.format("  %-" .. rank_w .. "s  %-" .. max_zone .. "s  %6s  %9s",
+      "#", "Zone", "Kills", "XP")
+   local sep = "  " .. string.rep("-", rank_w) .. "  " .. string.rep("-", max_zone) ..
+      "  " .. string.rep("-", 6) .. "  " .. string.rep("-", 9)
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
+
+   for i, r in ipairs(rows) do
+      local bg = row_bg(i)
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. rank_w .. "d", i), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_zone .. "s", trunc(r.zone or "?", max_zone)),
+            fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%6s", format_number(r.cnt)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%9s", format_number(r.xp)), fg = PALETTE.number_fg},
+      }, bg)
    end
 end
 
@@ -4933,20 +5416,53 @@ function ldb_top_xp(name, line, wildcards)
 
    ColourNote("cyan", "", PREFIX .. "Top " .. limit .. " mobs by avg XP per kill:")
 
-   local count = 0
+   local rows = {}
    for row in db:nrows(string.format(
       "SELECT mob_name, COUNT(*) as cnt, SUM(xp_gained) as xp, " ..
       "CAST(SUM(xp_gained) AS REAL) / COUNT(*) as avg_xp " ..
       "FROM kills " ..
       "GROUP BY mob_name HAVING cnt >= 3 " ..
       "ORDER BY avg_xp DESC LIMIT %d", limit)) do
-      count = count + 1
-      ColourNote("white", "", string.format("  %d. %s (avg %s XP, %d kills)",
-         count, row.mob_name, format_number(math.floor(row.avg_xp)), row.cnt))
+      table.insert(rows, row)
    end
 
-   if count == 0 then
+   if #rows == 0 then
       ColourNote("yellow", "", "  No mobs with 3+ kills recorded.")
+      return
+   end
+
+   local rank_w = #tostring(#rows)
+   local max_mob = 3
+   for _, r in ipairs(rows) do
+      if #r.mob_name > max_mob then max_mob = #r.mob_name end
+   end
+   if max_mob > 32 then max_mob = 32 end
+
+   local function trunc(s, w)
+      if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
+   end
+
+   local hdr = string.format("  %-" .. rank_w .. "s  %-" .. max_mob .. "s  %8s  %5s",
+      "#", "Mob", "Avg XP", "Kills")
+   local sep = "  " .. string.rep("-", rank_w) .. "  " .. string.rep("-", max_mob) ..
+      "  " .. string.rep("-", 8) .. "  " .. string.rep("-", 5)
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
+
+   for i, r in ipairs(rows) do
+      local bg = row_bg(i)
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. rank_w .. "d", i), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_mob .. "s", trunc(r.mob_name, max_mob)),
+            fg = PALETTE.mob_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%8s", format_number(math.floor(r.avg_xp))),
+            fg = PALETTE.completed},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5d", r.cnt), fg = PALETTE.number_fg},
+      }, bg)
    end
 end
 
@@ -4959,23 +5475,65 @@ function ldb_deaths(name, line, wildcards)
 
    ColourNote("cyan", "", PREFIX .. "Last " .. limit .. " deaths:")
 
-   local count = 0
+   -- Fetch all rows first so we can size columns
+   local rows = {}
    for row in db:nrows(string.format(
       "SELECT timestamp, mob_name, zone, level, tier, remort, redo FROM deaths " ..
       "ORDER BY timestamp DESC LIMIT %d", limit)) do
-      count = count + 1
-      local time_str = os.date("%Y-%m-%d %H:%M", row.timestamp)
-      local mob = (row.mob_name and row.mob_name ~= "") and row.mob_name or "unknown"
-      local tr = ""
-      if row.tier and row.remort then
-         tr = " [" .. format_tier_label(row.tier, row.redo) .. "R" .. row.remort .. "]"
-      end
-      ColourNote("white", "", string.format("  %s - Lvl %-3d - %-25s (%s)%s",
-         time_str, row.level, mob, row.zone, tr))
+      table.insert(rows, row)
    end
 
-   if count == 0 then
+   if #rows == 0 then
       ColourNote("yellow", "", "  No deaths recorded.")
+      return
+   end
+
+   local max_mob = 5   -- "Mob"
+   local max_zone = 4  -- "Zone"
+   for _, r in ipairs(rows) do
+      local mob = (r.mob_name and r.mob_name ~= "") and r.mob_name or "unknown"
+      if #mob > max_mob then max_mob = #mob end
+      if r.zone and #r.zone > max_zone then max_zone = #r.zone end
+   end
+   if max_mob > 28 then max_mob = 28 end
+   if max_zone > 22 then max_zone = 22 end
+
+   local function trunc(s, w)
+      if not s then return "" end
+      if #s > w then return string.sub(s, 1, w - 1) .. "+" else return s end
+   end
+
+   local hdr = string.format("  %-16s  %3s  %-" .. max_mob .. "s  %-" .. max_zone .. "s  %s",
+      "When", "Lvl", "Mob", "Zone", "Bracket")
+   local sep = "  " .. string.rep("-", 16) .. "  " .. string.rep("-", 3) .. "  " ..
+      string.rep("-", max_mob) .. "  " .. string.rep("-", max_zone) .. "  " ..
+      string.rep("-", 7)
+   ColourNote(PALETTE.header_fg, "", hdr)
+   ColourNote(PALETTE.sep_fg, "", sep)
+
+   for i, r in ipairs(rows) do
+      local time_str = os.date("%Y-%m-%d %H:%M", r.timestamp)
+      local mob = (r.mob_name and r.mob_name ~= "") and r.mob_name or "unknown"
+      local tr = ""
+      if r.tier and r.remort then
+         tr = format_tier_label(r.tier, r.redo) .. " R" .. r.remort
+      end
+      local bg = row_bg(i)
+
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-16s", time_str), fg = PALETTE.id_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%3d", r.level), fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_mob .. "s", trunc(mob, max_mob)),
+            fg = PALETTE.failed},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-" .. max_zone .. "s", trunc(r.zone or "?", max_zone)),
+            fg = PALETTE.text_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = tr, fg = PALETTE.summary_fg},
+      }, bg)
    end
 end
 
@@ -4984,7 +5542,14 @@ end
 -- =============================================================================
 function ldb_db_info(name, line, wildcards)
    ColourNote("cyan", "", PREFIX .. "Database info:")
-   ColourNote("white", "", "  Path: " .. (db_path or "(none)"))
+
+   local function detail(label, value, value_fg)
+      ColourTell(PALETTE.summary_fg, "", "  " .. label)
+      ColourTell(value_fg or PALETTE.text_fg, "", value)
+      Note("")
+   end
+
+   detail("Path:        ", db_path or "(none)", PALETTE.id_fg)
 
    if not db then
       ColourNote("yellow", "", "  Database not open.")
@@ -4996,39 +5561,37 @@ function ldb_db_info(name, line, wildcards)
    if f then
       local size = f:seek("end")
       f:close()
+      local size_str
       if size < 1024 then
-         ColourNote("white", "", "  Size: " .. size .. " bytes")
+         size_str = size .. " bytes"
       elseif size < 1024 * 1024 then
-         ColourNote("white", "", string.format("  Size: %.1f KB", size / 1024))
+         size_str = string.format("%.1f KB", size / 1024)
       else
-         ColourNote("white", "", string.format("  Size: %.1f MB", size / (1024 * 1024)))
+         size_str = string.format("%.1f MB", size / (1024 * 1024))
       end
+      detail("Size:        ", size_str, PALETTE.number_fg)
    end
 
-   -- Record counts
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM kills") do
-      ColourNote("white", "", "  Kills: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM deaths") do
-      ColourNote("white", "", "  Deaths: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM quests") do
-      ColourNote("white", "", "  Quests: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM campaigns") do
-      ColourNote("white", "", "  Campaigns: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM gquests") do
-      ColourNote("white", "", "  GQuests: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM pup_events") do
-      ColourNote("white", "", "  Pup events: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM level_events") do
-      ColourNote("white", "", "  Level events: " .. format_number(row.cnt))
-   end
-   for row in db:nrows("SELECT COUNT(*) as cnt FROM events") do
-      ColourNote("white", "", "  Events: " .. format_number(row.cnt))
+   -- Per-table counts as a small alt-row table
+   local tables = {
+      {name = "Kills",        sql = "SELECT COUNT(*) as cnt FROM kills"},
+      {name = "Deaths",       sql = "SELECT COUNT(*) as cnt FROM deaths"},
+      {name = "Quests",       sql = "SELECT COUNT(*) as cnt FROM quests"},
+      {name = "Campaigns",    sql = "SELECT COUNT(*) as cnt FROM campaigns"},
+      {name = "GQuests",      sql = "SELECT COUNT(*) as cnt FROM gquests"},
+      {name = "Pup events",   sql = "SELECT COUNT(*) as cnt FROM pup_events"},
+      {name = "Level events", sql = "SELECT COUNT(*) as cnt FROM level_events"},
+      {name = "Events",       sql = "SELECT COUNT(*) as cnt FROM events"},
+   }
+   for i, t in ipairs(tables) do
+      local cnt = 0
+      for row in db:nrows(t.sql) do cnt = row.cnt end
+      local bg = row_bg(i)
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-13s", t.name .. ":"), fg = PALETTE.summary_fg},
+         {text = string.format("%9s", format_number(cnt)), fg = PALETTE.number_fg},
+      }, bg)
    end
 end
 
@@ -5132,16 +5695,25 @@ local function render_daily_counts(days)
 
    local today = os.date('%Y-%m-%d')
    ColourNote("cyan", "", string.format("%sDaily activity (last %d days, ending %s):", PREFIX, n, today))
-   local fmt = "  %-11s %5s  %5s  %4s  %4s  %7s  %7s  %9s  %8s"
-   ColourNote("cyan", "", string.format(fmt, "Date", "Kills", "Deaths", "Lvl", "Pup",
-      "Quests", "CPs", "GQs", "Gold"))
-   ColourNote("cyan", "", string.format(fmt, "----------", "-----", "------", "----", "----",
-      "-------", "-------", "---------", "--------"))
 
+   local hdr_text = string.format(
+      "  %-11s %5s  %5s  %4s  %4s  %7s  %7s  %9s  %8s",
+      "Date", "Kills", "Deaths", "Lvl", "Pup", "Quests", "CPs", "GQs", "Gold")
+   local sep = string.format(
+      "  %-11s %5s  %5s  %4s  %4s  %7s  %7s  %9s  %8s",
+      "----------", "-----", "------", "----", "----",
+      "-------", "-------", "---------", "--------")
+   ColourNote(PALETTE.header_fg, "", hdr_text)
+   ColourNote(PALETTE.sep_fg, "", sep)
+
+   -- Render oldest -> newest (today at bottom). Bg alternates by row index.
+   local row_idx = 0
    for i = #days, 1, -1 do
+      row_idx = row_idx + 1
       local d = days[i]
       local is_today = (d == today)
       local date_label = is_today and (d .. "*") or (d .. " ")
+      local date_fg = is_today and PALETTE.active or PALETTE.text_fg
       local k = (kills[d] or {}).cnt or 0
       local de = (deaths[d] or {}).cnt or 0
       local lv = (lvls[d] or {}).cnt or 0
@@ -5153,11 +5725,30 @@ local function render_daily_counts(days)
                        + ((gold_gq[d] or {}).amt or 0) + ((gold_misc[d] or {}).amt or 0)
       local gq_str = (gq.total or 0) == 0 and "-"
          or string.format("%d/%d/%d", gq.won or 0, gq.comp or 0, gq.total or 0)
-      local row = string.format(fmt, date_label,
-         ndash(k), ndash(de), ndash(lv), ndash(pu),
-         ratio2(q.comp, q.total), ratio2(cp.comp, cp.total), gq_str,
-         compact(gold_total))
-      ColourNote(is_today and "yellow" or "white", "", row)
+      local bg = row_bg(row_idx)
+      -- Death cell goes red when nonzero so it draws the eye
+      local de_fg = (de > 0) and PALETTE.failed or PALETTE.number_fg
+
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-11s", date_label), fg = date_fg},
+         {text = " ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(k)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(de)), fg = de_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%4s", ndash(lv)), fg = PALETTE.completed},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%4s", ndash(pu)), fg = PALETTE.completed},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%7s", ratio2(q.comp, q.total)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%7s", ratio2(cp.comp, cp.total)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%9s", gq_str), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%8s", compact(gold_total)), fg = PALETTE.number_fg},
+      }, bg)
    end
 end
 
@@ -5227,16 +5818,24 @@ local function render_daily_rewards(days)
 
    local today = os.date('%Y-%m-%d')
    ColourNote("cyan", "", string.format("%sDaily rewards (last %d days):", PREFIX, n))
-   local fmt = "  %-11s %6s  %6s  %5s  %5s  %5s  %5s  %5s  %6s  %5s"
-   ColourNote("cyan", "", string.format(fmt, "Date", "XP", "QP",
-      "Q", "CP", "GQ", "oth", "TP", "Trains", "Pracs"))
-   ColourNote("cyan", "", string.format(fmt, "----------", "------", "------",
-      "-----", "-----", "-----", "-----", "-----", "------", "-----"))
 
+   local hdr_text = string.format(
+      "  %-11s %6s  %6s  %5s  %5s  %5s  %5s  %5s  %6s  %5s",
+      "Date", "XP", "QP", "Q", "CP", "GQ", "oth", "TP", "Trains", "Pracs")
+   local sep = string.format(
+      "  %-11s %6s  %6s  %5s  %5s  %5s  %5s  %5s  %6s  %5s",
+      "----------", "------", "------",
+      "-----", "-----", "-----", "-----", "-----", "------", "-----")
+   ColourNote(PALETTE.header_fg, "", hdr_text)
+   ColourNote(PALETTE.sep_fg, "", sep)
+
+   local row_idx = 0
    for i = #days, 1, -1 do
+      row_idx = row_idx + 1
       local d = days[i]
       local is_today = (d == today)
       local date_label = is_today and (d .. "*") or (d .. " ")
+      local date_fg = is_today and PALETTE.active or PALETTE.text_fg
       local xp_v = (xp[d] or {}).amt or 0
       local q_v = (qp_q[d] or {}).amt or 0
       local cp_v = (qp_cp[d] or {}).amt or 0
@@ -5250,12 +5849,30 @@ local function render_daily_rewards(days)
                      + ((tr_gq[d] or {}).amt or 0) + ((tr_other[d] or {}).amt or 0)
       local pr_total = ((pr_lvl[d] or {}).amt or 0) + ((pr_q[d] or {}).amt or 0)
                      + ((pr_cp[d] or {}).amt or 0) + ((pr_other[d] or {}).amt or 0)
+      local bg = row_bg(row_idx)
 
-      local row = string.format(fmt, date_label,
-         compact(xp_v), ndash(qp_total),
-         ndash(q_v), ndash(cp_v), ndash(gq_v), ndash(oth_v),
-         ndash(tp_total), ndash(tr_total), ndash(pr_total))
-      ColourNote(is_today and "yellow" or "white", "", row)
+      emit_row({
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%-11s", date_label), fg = date_fg},
+         {text = " ", fg = PALETTE.text_fg},
+         {text = string.format("%6s", compact(xp_v)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%6s", ndash(qp_total)), fg = PALETTE.completed},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(q_v)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(cp_v)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(gq_v)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(oth_v)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(tp_total)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%6s", ndash(tr_total)), fg = PALETTE.number_fg},
+         {text = "  ", fg = PALETTE.text_fg},
+         {text = string.format("%5s", ndash(pr_total)), fg = PALETTE.number_fg},
+      }, bg)
    end
 end
 

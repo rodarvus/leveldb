@@ -94,15 +94,17 @@ QUERIES (POWERUPS):
 
 QUERIES (QUESTS/CAMPAIGNS):
   ldb quest [filter]      - Quest history table (default: current tier & remort)
-                            Shows: ID, Lvl, QP, Gold, TP, Time, Mob (Area)
-                            Colored suffixes: (active) green, (failed)/(timeout) red
+                            Shows: ID, Lvl, QP, Gold, TP, Time, Mob (Area), Result
+                            Per-cell coloring: completed lime, failed/timeout red,
+                            unknown yellow, active bright green
                             Summary with completion rate, avg QP, avg time
                             Filter options: same as level/this/last commands
-                            Capped at 50 rows; total count shown if more exist
+                            (No row cap as of v9.2; index-backed scan)
 
   ldb cp [filter]         - Campaign history table (default: current tier & remort)
-                            Shows: ID, Lvl, Mobs, QP, Gold, TP, Time
-                            Colored suffixes: (active) green, (quit) red
+                            Shows: ID, Lvl, Mobs, QP, Gold, TP, Time, Result
+                            Per-cell coloring: completed lime, quit red,
+                            unknown yellow, active bright green
                             Summary with completion rate, avg QP, avg time
                             Filter options: same as level/this/last commands
                             Also: ldb cps, ldb campaign, ldb campaigns
@@ -114,9 +116,9 @@ QUERIES (QUESTS/CAMPAIGNS):
 
 QUERIES (GLOBAL QUESTS):
   ldb gq [filter]         - Global quest history table (default: current tier & remort)
-                            Shows: ID, Lvl, Mobs, QP, Gold, TP, Time
-                            Colored suffixes: active (green), won (cyan),
-                            expired/cancelled/quit (red)
+                            Shows: ID, Lvl, Mobs, QP, Gold, TP, Time, Result
+                            Per-cell coloring: won/completed lime,
+                            expired/cancelled/quit red, active bright green
                             Summary with win count, avg QP, avg time
                             Filter options: same as quest/campaign commands
                             Also: ldb gquest, ldb gquests
@@ -127,8 +129,32 @@ QUERIES (GLOBAL QUESTS):
                             with kill counts for multi-target mobs
                             Also: ldb gquest show, ldb gquests show
 
-DATABASE:
-  ldb db                  - Database file info: path, size, record counts
+DAILY REPORT:
+  ldb daily [N]           - Per-day activity & rewards report (default 7, max 365)
+                            Two tables: counts (kills/deaths/lvl/pup/quests/cps/gqs/gold)
+                            and rewards (XP/QP/QP-by-source/TP/trains/pracs).
+                            Day boundary: local clock midnight.
+                            Today's row marked with * and highlighted.
+                            Sources: kills/quests/campaigns/gquests/pup_events/
+                                     level_events/events tables, all GROUP BY date.
+
+DATABASE / PLUGIN MANAGEMENT:
+  ldb db                  - Database file info: path, size, per-table record counts
+  ldb reload              - DoAfterSpecial(1, ReloadPlugin(...)) to bounce in place
+  ldb update              - Fetch leveldb.xml from
+                            github.com/rodarvus/leveldb/main, install only if
+                            upstream version is strictly newer (numeric compare,
+                            splitting on '.')
+  ldb update check        - Report relationship without installing
+  ldb update force        - Reinstall regardless of version
+
+PRESENTATION:
+  All tabular reports use per-cell ColourTell + alternating row backgrounds
+  (S&D-style) and a configurable palette. Override colors via:
+    SetVariable("ldb_palette_<key>", "#hex")  -- then ldb reload
+  Keys: header_fg, sep_fg, alt_row_bg, text_fg, id_fg, number_fg, mob_fg,
+        completed, failed, timeout, unknown, active, summary_fg
+  Set alt_row_bg to "#000000" to disable alt-row backgrounds entirely.
 
 ================================================================================
 DATABASE DESIGN
@@ -250,6 +276,33 @@ Schema:
     area        TEXT                     -- area short name from gq check (nullable)
     mob_count   INTEGER DEFAULT 1        -- kill count (2 * billows of smoke -> 2)
 
+  level_events:                          -- v9.1+ (added for ldb daily)
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT
+    timestamp              INTEGER NOT NULL  -- os.time() at level-up
+    level                  INTEGER NOT NULL  -- the level just reached
+    tier                   INTEGER           -- char.base.tier (nullable)
+    remort                 INTEGER           -- char.base.remorts (nullable)
+    redo                   INTEGER           -- char.base.redos (nullable)
+    hp_gained              INTEGER           -- from per-level "You gain X hp..." line
+    mana_gained            INTEGER
+    moves_gained           INTEGER
+    pracs_gained           INTEGER
+    trains_gained          INTEGER
+    instinct_trains_gained INTEGER           -- only present for instinct-train levels
+
+  events:                                -- v9.1+ (generic reward log)
+    id        INTEGER PRIMARY KEY AUTOINCREMENT
+    timestamp INTEGER NOT NULL
+    category  TEXT NOT NULL               -- 'gold' | 'tp' | 'qp' | 'train' | 'prac'
+    source    TEXT NOT NULL               -- e.g. 'mob', 'sac', 'sell', 'fence', 'haggle',
+                                          --      'crumble', 'shared', 'db_bless', 'db_kill',
+                                          --      'tax', 'epic', 'db', 'instinct_deposit'
+    amount    INTEGER NOT NULL            -- can be negative (tax, db_kill offset)
+    level     INTEGER                     -- char snapshot at insert time
+    tier      INTEGER
+    remort    INTEGER
+    redo      INTEGER
+
 Indexes:
   idx_kills_level, idx_kills_zone, idx_kills_mob, idx_kills_timestamp
   idx_kills_tier, idx_kills_remort, idx_kills_pup, idx_kills_mob_level
@@ -260,6 +313,8 @@ Indexes:
   idx_pup_events_tier_remort
   idx_gquests_level, idx_gquests_tier, idx_gquests_remort, idx_gquests_redo
   idx_gquest_mobs_gqid
+  idx_level_events_ts, idx_level_events_tier_remort
+  idx_events_ts, idx_events_cat_src
 
 Design Decisions:
 - xp_gained = 0 is valid (mobs that yield no XP, fled/interrupted combats).
@@ -290,6 +345,19 @@ Design Decisions:
 - Campaign expected_qp/expected_gold are captured from cp info output for two
   purposes: reconnect matching (compare level + expected_qp to detect same campaign)
   and display in ldb cp show for active campaigns.
+- level_events is a two-step capture: trigger A on "You raise a level!" inserts
+  the row, trigger B on "You gain X hp, X mana, ..." updates with per-level
+  gains. pending_level_id holds the row id between the two triggers and is
+  cleared after 2s as a safety net. Pups (level 200+ powerups) do NOT generate
+  level_events rows; they live in pup_events.
+- events table is intentionally generic (category, source, amount) so new reward
+  streams can be added by registering a new trigger handler that calls
+  record_event(). Sources from DullTracker are reused verbatim where possible.
+  gold/db_kill is recorded as a positive row PLUS an offsetting negative gold/mob
+  row, because the corpse "You get N gold" line already INCLUDES the DB bonus;
+  the offset preserves attribution while keeping the daily total correct.
+  Quest/cp/gq rewards are NOT inserted into events — they remain on their own
+  tables, and the daily report SUMs both sources.
 
 ================================================================================
 COMBAT STATE MACHINE

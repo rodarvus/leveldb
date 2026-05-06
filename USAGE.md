@@ -32,7 +32,11 @@ Type `ldb on` to start collecting. Everything else is automatic.
 | `ldb gq` | Global quest history |
 | `ldb gq show 5` | Full detail for a global quest |
 | `ldb deaths` | Recent deaths |
+| `ldb daily` | Per-day activity & rewards (last 7 days) |
+| `ldb daily 14` | Per-day breakdown over a longer window |
 | `ldb db` | Database file info |
+| `ldb reload` | Reload the plugin in place |
+| `ldb update` | Pull latest leveldb.xml from GitHub |
 | `ldb help` | List all commands in-game |
 
 ---
@@ -462,21 +466,73 @@ Last N deaths (default 10). Shows timestamp, level, mob, zone, and tier/remort.
   2026-02-23 08:34 - Lvl 11  - unknown                   (sanctity) [T1R7]
 ```
 
+### `ldb daily [N]` — Per-Day Activity & Rewards Report
+
+Two side-by-side tables covering the last N days (default 7, max 365). Today's row is highlighted and marked with `*`.
+
+**Section 1 — Activity counts**: kills, deaths, levels gained, powerups, quests (completed/total), campaigns (completed/total), global quests (won/completed/total), total gold earned.
+
+**Section 2 — Rewards**: total XP from kills, QP broken down by Q/CP/GQ/other, total TP, total trains, total pracs.
+
+```
+> ldb daily
+
+[LevelDB] Daily activity (last 7 days, ending 2026-05-06):
+  Date          Kills  Deaths   Lvl   Pup   Quests      CPs        GQs       Gold
+  ----------    -----  ------   ----  ----  -------    -------   ---------  --------
+  2026-04-30      287       2      2     -    14/15      8/8       1/0/2      2.3M
+  2026-05-01      312       0      1     -    16/16      9/9          -       2.9M
+  2026-05-06*      43       0      -     -      2/2      1/1          -      420K
+
+[LevelDB] Daily rewards (last 7 days):
+  Date            XP        QP       Q     CP     GQ    oth      TP   Trains   Pracs
+  ----------    ------  ------   -----  -----  -----  -----   -----  -------  ------
+  2026-04-30     4.2M    1,847     420    980    220    227      12       58       9
+  ...
+```
+
+Sources:
+- Kills/Deaths/Levels/Pups counts come from the corresponding tables.
+- Quest/CP/GQ counts and rewards come from those tables (only `completed` for Q/CP, `won|completed` for GQ).
+- "QP-other" is from the `events` table — rewards not attached to a specific quest/cp/gq, e.g. daily blessing or epic rewards.
+- Gold is `quests.gold + campaigns.gold + gquests.gold + SUM(events.amount WHERE category='gold')`.
+- XP is `SUM(kills.xp_gained)` (the TNL-delta value, which already includes bonus/rare/daily/double XP).
+
 ### `ldb db` — Database Info
 
-Shows the database file path, size, and record counts.
+Shows the database file path, size, and record counts (per table).
 
 ```
 > ldb db
 
 [LevelDB] Database info:
-  Path: C:\...\state\leveldb\leveldb.db
-  Size: 2.3 MB
-  Kills: 12,787
-  Deaths: 1
-  Quests: 17
-  Campaigns: 21
+  Path:          C:\...\state\leveldb\leveldb.db
+  Size:          2.3 MB
+  Kills:         12,787
+  Deaths:            1
+  Quests:           17
+  Campaigns:        21
+  GQuests:           5
+  Pup events:       42
+  Level events:    195
+  Events:        4,210
 ```
+
+### `ldb reload` — Reload the Plugin
+
+Triggers `ReloadPlugin(GetPluginID())` after a 1-second delay. Useful when developing or after `ldb update`.
+
+### `ldb update [check|force]` — Self-Update from GitHub
+
+Fetches `https://raw.githubusercontent.com/rodarvus/leveldb/main/leveldb.xml` and compares the upstream version to the running plugin (numeric compare splitting on `.`).
+
+| Mode | Behavior |
+|------|----------|
+| `ldb update` | Install only if upstream is **strictly newer**. Refuses to downgrade. |
+| `ldb update check` | Report the relationship without installing. |
+| `ldb update force` | Reinstall regardless of version (use to roll back to upstream). |
+
+The strict-newer compare exists because an early version equality-tested versions and silently downgraded a working tree to upstream, losing every uncommitted edit.
 
 ---
 
@@ -488,6 +544,8 @@ Shows the database file path, size, and record counts.
 - **Quests**: Tracked automatically via GMCP `comm.quest` messages (start, complete, fail, timeout).
 - **Campaigns**: Tracked via text triggers for campaign start/complete/quit. Mob lists are captured by silently running `cp info`.
 - **Global Quests**: Tracked via text triggers for join/won/completed/expired/cancelled/quit. Mob lists are captured by silently running `gq check`, and expected rewards from `gq info`. Per-mob QP is accumulated from "N quest points awarded" lines after each mob kill.
+- **Level-ups** (v9.1+): Captured from the "You raise a level!" trigger plus the per-level "You gain X hp, X mana, ..." follow-up.
+- **Reward events** (v9.1+): Stored in a generic `events` table (category, source, amount): mob/sac/sell/fence/haggle gold, daily-blessing & epic rewards across QP/gold/TP/trains, mob/db/epic trivia points, instinct deposits.
 
 All records include your current level, tier, and remort at the time of the event.
 

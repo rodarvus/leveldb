@@ -2,7 +2,7 @@
 
 A leveling database plugin for [Aardwolf MUD](http://www.aardwolf.com/), built for [MUSHclient](http://www.gammon.com.au/mushclient/).
 
-LevelDB records combat encounters, quest completions, and campaign results into a persistent SQLite database. It tracks every kill, death, quest, and campaign across your character's entire leveling journey, with rich query commands to analyze your history.
+LevelDB records combat encounters, quest completions, campaign results, global quests, level-ups, and miscellaneous reward streams into a persistent SQLite database. It tracks every kill, death, quest, campaign, level-up, and powerup across your character's entire leveling journey, with rich query commands and a daily activity report to analyze your history.
 
 ## Features
 
@@ -40,6 +40,11 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 - Reconnect reconciliation: detects in-progress GQs on plugin reload
 - Detailed GQ view with full mob list
 
+**Level-up & misc reward tracking** (v9.1+)
+- Level-up events with per-level stat gains (hp, mana, moves, pracs, trains, instinct trains)
+- Generic events table for non-quest/cp/gq reward streams: gold (mob/sac/sell/fence/haggle/db/epic/tax), TP (mob/db/epic), QP (db/epic), trains (db/epic/instinct deposit)
+- Powers the daily activity & rewards report
+
 **Query and analysis**
 - Per-level kill breakdowns with totals and averages
 - Redo support: after T9R7, redo count tracked alongside tier/remort. Filter syntax: `T9+3 R5`. Hidden in display when 0.
@@ -50,6 +55,12 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 - Per-zone and per-mob stats with substring search
 - Top-N rankings by kill count, total XP, or average XP
 - Quest and campaign history tables with colored status, summaries, and averages
+- **Daily activity & rewards report** — per-day breakdown of kills/deaths/lvls/pups/quests/cps/gqs/gold and XP/QP/QP-by-source/TP/trains/pracs over the last N days
+- Tabular output with alternating row backgrounds and per-cell semantic coloring (palette overridable via `SetVariable("ldb_palette_<key>", "#hex")`)
+
+**Plugin management** (v9.2+)
+- `ldb reload` to reload the plugin in place
+- `ldb update [check|force]` to fetch the latest version from GitHub. Numeric version compare prevents downgrade on bare `ldb update`; use `force` to override
 
 ## Commands
 
@@ -77,7 +88,10 @@ LevelDB records combat encounters, quest completions, and campaign results into 
 | `ldb cp show <id>` | Detailed view of a campaign by database ID |
 | `ldb gq [filter]` | Global quest history table (default: current T+R) |
 | `ldb gq show <id>` | Detailed view of a global quest by database ID |
+| `ldb daily [N]` | Per-day activity & rewards report (default 7 days, max 365) |
 | `ldb db` | Database file info (path, size, record counts) |
+| `ldb reload` | Reload the plugin in place |
+| `ldb update [check\|force]` | Update from GitHub (`check` = report only, `force` = reinstall regardless) |
 
 **Filter options** (for level/this/last/pup/quest/cp): default = current tier+redo and remort. `all` = all tiers and remorts. `T1 R5` = specific tier and remort. `T9+3 R5` = tier 9, redo 3, remort 5. `T1` = all remorts within a tier. `R4` = specific remort, current tier. Redo is hidden in display when 0.
 
